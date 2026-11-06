@@ -26,7 +26,7 @@ import type { Job } from "../protocol/job.ts";
 import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
-import { forgetOldUsage, loadUsage, saveUsage, usageDelta } from "./usage.ts";
+import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
 
 const RUNS = path.join(HOME, "worker", "runs");
 const NOTHING: Usage = { input: 0, output: 0, cached: 0, cost: 0 };
@@ -362,7 +362,7 @@ export function createWorker({
     if (entry.repairs && !problem && result.outcome === "failed") return discardReceipt(entry, adapter, result.error!);
     if (!problem) return endWith(entry, result);
     // Its work is done and only the receipt is wrong: it writes the receipt again, and does nothing again.
-    if (adapter.link && entry.repairs < REPAIRS && seen.session) {
+    if (entry.repairs < REPAIRS && seen.session) {
       log(`run ${entry.run}: receipt not readable (${problem}); asking again`);
       entry.repairs += 1;
       entry.resume = seen.session;
@@ -398,6 +398,7 @@ export function createWorker({
       }
     }
     const { exit } = files(entry);
+    const exitCode = () => (existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
     if (entry.stopping !== undefined) {
       const going = groupAlive(entry);
       if (going !== false) {
@@ -406,14 +407,12 @@ export function createWorker({
         // Unable to look, the kill is the last we can know of it; waiting to see it gone would hold the run forever.
         if (going || !overdue) return;
       }
-      return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
+      return conclude(entry, adapter, exitCode());
     }
-    if (existsSync(exit)) return conclude(entry, adapter, Number(readFileSync(exit, "utf8").trim()));
+    if (existsSync(exit)) return conclude(entry, adapter, exitCode());
     // The shell can publish its exit between the first file check and ps returning.
     const looking = alive(entry);
-    if (looking === false) {
-      return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
-    }
+    if (looking === false) return conclude(entry, adapter, exitCode());
     // Unable to look, the run counts as still going, so its timeout and its finished turn still end it.
     if (looking === null && !blind) log(`couldn't run ps; runs count as going until they end or time out`);
     blind = looking === null;
@@ -447,7 +446,7 @@ export function createWorker({
     }
   }
 
-  function stop(entry: Entry, why: "cancel" | "timeout" | "finished") {
+  function stop(entry: Entry, why: NonNullable<Entry["why"]>) {
     if (entry.stopping !== undefined || entry.result) return;
     entry.stopping = now();
     entry.why = why;
@@ -554,17 +553,10 @@ export function createWorker({
         sayOnce(`couldn't clear ${dir}: ${error}`);
       }
     }
-    try {
-      forgetOldUsage(moment);
-    } catch (error) {
-      sayOnce(`couldn't clear old session totals: ${error}`);
-    }
   }
 
   async function run(signalled: AbortSignal) {
     log(`worker ${name} started`);
-    // Started again after trouble, it may be what went: nothing else would bring it back, and every round needs it.
-    mkdirSync(RUNS, { recursive: true, mode: 0o700 });
     while (!signalled.aborted) {
       if (!(await tick())) await new Promise((resolve) => setTimeout(resolve, PAUSE));
     }

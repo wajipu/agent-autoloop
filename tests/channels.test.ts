@@ -3,8 +3,10 @@
 // isn't reported; a click that isn't a card's is taken; a card's options don't show while it's open or still show after;
 // the listener dying isn't started again, or a listener that can't start takes the whole hub down. A GitHub webhook with
 // a bad signature, or with none, is taken; what isn't an identifier reaches the subject; a ping makes an event;
-// replacement tokens in card text rewrite a webhook template.
+// replacement tokens in card text rewrite a webhook template. A settled card Feishu won't let the bot change stays at the
+// version before the answer; an open one is sent again with buttons that don't count.
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
+// A U+2028 or U+2029 in what someone typed, which JSON leaves as it is, cuts the click's line and loses the click.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -213,6 +215,41 @@ esac
   );
 });
 
+test("feishu: U+2028 and U+2029 in a handling note don't lose the click", async () => {
+  const lark = join(dir, "lark-cli-separators");
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+case "$*" in
+  *"event consume"*)
+    echo '{"action_name":"handling_note_submit_8","action_value":"","form_value":"{\\"note\\":\\"第一行 第二行 第三行\\"}","operator_id":"ou_me","message_id":"om_8"}'
+    exec sleep 30 ;;
+  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_8"}}' ;;
+esac
+`,
+  );
+  chmodSync(lark, 0o755);
+  const stop = new AbortController();
+  const answers: unknown[][] = [];
+  let answered = () => {};
+  const click = new Promise<void>((resolve) => (answered = resolve));
+  const hub = {
+    async nextCard() {
+      // Until the click comes, however busy this machine is, or until it's clear it won't.
+      await Promise.race([click, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+      stop.abort();
+      return { card: null };
+    },
+    async answer(...args: unknown[]) {
+      answers.push(args);
+      answered();
+      return { changed: true };
+    },
+  };
+  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  assert.deepEqual(answers, [[8, { choice: 0, by: "ou_me", ref: "om_8", text: "第一行 第二行 第三行" }]]);
+});
+
 test("feishu: a form submit carries the handling note, and the button's name finds its card", async () => {
   const log = join(dir, "lark-note.log");
   const lark = join(dir, "lark-cli-note");
@@ -355,4 +392,74 @@ test("GitHub: signed or not taken, and what it says becomes a plain event", () =
     (github({ headers: headers(odd, { "x-github-event": "push" }), body: odd, secret }) as any)[0].subject,
     /^a\/b-c$/,
   );
+});
+
+/** A Feishu channel handed these cards, with a lark-cli that refuses every update: what it ran, and what it told the hub. */
+async function refusedUpdates(given: Card[]) {
+  const log = join(dir, "lark-patch.log");
+  const lark = join(dir, "lark-patch");
+  rmSync(log, { force: true });
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+echo "$*" >> "${log}"
+case "$*" in
+  *"event consume"*) exec sleep 30 ;;
+  *"messages patch"*) cat > /dev/null; exit 1 ;;
+  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_new"}}' ;;
+esac
+`,
+  );
+  chmodSync(lark, 0o755);
+  const stop = new AbortController();
+  const cards: Card[] = [...given];
+  const calls: unknown[][] = [];
+  const hub = {
+    async nextCard() {
+      if (cards.length) return { card: cards.shift()! };
+      stop.abort();
+      return { card: null };
+    },
+    async delivered(...args: unknown[]) {
+      calls.push(["delivered", ...args]);
+      return {};
+    },
+    async failed(id: number, version: number) {
+      calls.push(["failed", id, version]);
+      return {};
+    },
+    async answer(...args: unknown[]) {
+      calls.push(["answer", ...args]);
+      return { changed: true };
+    },
+  };
+  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  return { lines: readFileSync(log, "utf8").trim().split("\n"), calls };
+}
+
+test("feishu: a settled card that can't be updated is sent again, once for each version", async () => {
+  // Failure this guards: the bot didn't send the message being updated, so Feishu refuses and the update is dropped once the
+  // tries run out. The reader is then stuck looking at the version before the answer.
+  const { lines, calls } = await refusedUpdates([{ ...base, version: 2, ref: "om_old", state: "decided", choice: 1 }]);
+  assert.ok(
+    lines.some((l) => l.includes("messages patch --message-id om_old")),
+    "the message that was sent is tried first",
+  );
+  const sends = lines.filter((l) => l.includes("+messages-send"));
+  assert.equal(sends.length, 1, "a refused update falls back to a new message");
+  assert.ok(sends[0].includes("--idempotency-key agent-autoloop-card-5-v2 "), "the second message is this version's");
+  assert.deepEqual(calls, [["delivered", 5, 2, "om_old"]], "the hub goes on knowing the message it first heard of");
+});
+
+test("feishu: an open card that can't be updated isn't sent again, and a first message is keyed by the card alone", async () => {
+  // Failure this guards: the hub only counts answers on the first message, so buttons on a second one would do nothing; a
+  // first message keyed by its version comes twice when a report is lost and the card has moved on.
+  const open = await refusedUpdates([{ ...base, version: 2, ref: "om_old" }]);
+  assert.equal(open.lines.filter((l) => l.includes("+messages-send")).length, 0);
+  assert.deepEqual(open.calls, [["failed", 5, 2]], "it's tried again later");
+
+  const first = await refusedUpdates([{ ...base, version: 3, ref: null }]);
+  const [send] = first.lines.filter((l) => l.includes("+messages-send"));
+  assert.ok(send.includes("--idempotency-key agent-autoloop-card-5 "), send);
+  assert.deepEqual(first.calls, [["delivered", 5, 3, "om_new"]]);
 });

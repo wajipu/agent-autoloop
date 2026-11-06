@@ -4,6 +4,7 @@ import { whose, type Environment } from "./credentials.ts";
 import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
 import type { Row, View } from "./evolve.ts";
 import { agentsOf, cancels, cardView, configuration } from "./query.ts";
+import { isAsk } from "../protocol/validate.ts";
 
 export type Services = {
   now(): number;
@@ -119,24 +120,38 @@ async function webhook(call: Call, source: string) {
 }
 
 async function tell(call: Call) {
-  const { rules, view } = call;
+  const { rules } = call;
   const source = keyHolder(call, "source");
   const worker = source ? null : keyHolder(call, "worker");
   if (!source && !worker) throw new AuthError("要来源或接单程序的密钥");
   const input = await readJson(call.request);
+  // A task elsewhere either tells you something or asks you, with a question just as a receipt's.
+  if (worker && input && typeof input === "object" && "ask" in input) return askAsTask(call, worker, input);
   const expected = source ? ["key", "text"] : ["key", "task", "text"];
   const hasExpected = input && typeof input === "object" && Object.keys(input).sort().join() === expected.join();
   const keyIsValid = typeof input?.key === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(input.key);
   const text = typeof input?.text === "string" ? input.text.trim() : "";
   if (!hasExpected || !keyIsValid || !text || [...text].length > 20_000) {
-    throw new InputError("要有正确的 key 和 text，接单程序还要写 task，text 最多 20000 字");
+    throw new InputError("要有正确的 key 和 text，接单程序还要写 task，text 最多 20000 字；问你的写 task 和 ask");
   }
   if (source) {
     return json(act(call, "tell", `source:${source}:${input.key}`, rules.sources[source]?.name ?? source, text));
   }
-  const task = rules.elsewhere.find((task) => task.name === input.task && agentsOf(view, worker!).includes(task.to));
-  if (!task) throw new AuthError("这台接单程序没有这个定时任务");
+  const task = taskOf(call, worker!, input.task);
   return json(act(call, "tell", `elsewhere:${task.name}:${input.key}`, task.name, text));
+}
+
+function taskOf({ rules, view }: Call, worker: string, name: unknown) {
+  const task = rules.elsewhere.find((task) => task.name === name && agentsOf(view, worker).includes(task.to));
+  if (!task) throw new AuthError("这台接单程序没有这个定时任务");
+  return task;
+}
+
+function askAsTask(call: Call, worker: string, input: Record<string, any>) {
+  if (Object.keys(input).sort().join() !== "ask,task" || !isAsk(input.ask)) {
+    throw new InputError("问你的只写 task 和 ask，ask 和回执里的一样：title、text、2 到 5 个 options");
+  }
+  return json(act(call, "ask", taskOf(call, worker, input.task).name, input.ask));
 }
 
 async function work(call: Call) {

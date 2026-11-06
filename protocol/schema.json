@@ -163,6 +163,9 @@
         "key": {
           "type": "string",
           "maxLength": 100
+        },
+        "fyi": {
+          "type": "boolean"
         }
       },
       "required": ["title", "text"],
@@ -396,6 +399,20 @@
         }
       },
       "required": ["key", "text", "task"],
+      "additionalProperties": false
+    },
+    "ask-worker": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string",
+          "maxLength": 200,
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "ask": { "$ref": "#/$defs/ask" }
+      },
+      "required": ["task", "ask"],
       "additionalProperties": false
     },
     "job": {
