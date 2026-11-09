@@ -1,3 +1,8 @@
+import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
+import Foundation
+
 import Foundation
 
 /// 工作项大类。App 和分享扩展共用。
@@ -5,6 +10,8 @@ enum IssueCategory: String, CaseIterable, Identifiable {
     case bug = "Bug"
     case task = "Task"
     case req = "Req"
+    case topic = "Topic"
+    case risk = "Risk"
 
     var id: String { rawValue }
     var label: String {
@@ -12,6 +19,8 @@ enum IssueCategory: String, CaseIterable, Identifiable {
         case .bug: "缺陷"
         case .task: "任务"
         case .req: "需求"
+        case .topic: "主题"
+        case .risk: "风险"
         }
     }
 }

@@ -99,3 +99,21 @@ struct WorkitemDetail: Decodable {
     var updated: Date? { gmtModified.map { Date(timeIntervalSince1970: $0 / 1000) } }
     var body: String { description?.text ?? "" }
 }
+
+
+
+/// 项目里实际存在的工作项类型（从云效接口拉取，不写死）。
+struct WorkItemType: Identifiable, Hashable {
+    let id: String          // workitemTypeIdentifier，创建时要用
+    let name: String        // 如「缺陷」「线上故障」「产品类需求」
+    let category: IssueCategory
+    let isDefault: Bool
+
+    /// 接口拉不到时的静态兜底。
+    static let fallback: [WorkItemType] = [
+        .init(id: "Bug-default", name: "缺陷", category: .bug, isDefault: true),
+        .init(id: "Task-default", name: "任务", category: .task, isDefault: true),
+        .init(id: "Req-default", name: "需求", category: .req, isDefault: true),
+    ]
+}
+

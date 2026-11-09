@@ -73,13 +73,25 @@ struct YunxiaoClient {
     }
 
     func workitemTypeID(category: IssueCategory) async throws -> String {
+        let types = try await workitemTypes(category: category)
+        guard let chosen = types.first(where: { $0.isDefault }) ?? types.first else {
+            throw YunxiaoError.decoding("这个项目没有「\(category.label)」类型")
+        }
+        return chosen.id
+    }
+
+    /// 项目里某大类下全部工作项类型（含「线上故障」「技术类需求」这种非默认的）。
+    func workitemTypes(category: IssueCategory) async throws -> [WorkItemType] {
         let path = "/oapi/v1/projex/organizations/\(orgId)/projects/\(projectId)/workitemTypes?category=\(category.rawValue)"
         let data = try await request(path: path, method: "GET", body: nil)
-        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              let chosen = list.first(where: { $0["defaultType"] as? Bool == true }) ?? list.first,
-              let id = chosen["id"] as? String
-        else { throw YunxiaoError.decoding("这个项目没有「\(category.label)」类型") }
-        return id
+        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return list.compactMap { item -> WorkItemType? in
+            guard let id = item["id"] as? String else { return nil }
+            return WorkItemType(id: id,
+                                name: item["name"] as? String ?? id,
+                                category: category,
+                                isDefault: item["defaultType"] as? Bool == true)
+        }
     }
 
     /// 这个类型必填、而且要在表单里选的字段（优先级、严重程度这类）。

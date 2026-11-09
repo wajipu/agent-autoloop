@@ -1,16 +1,18 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
-import PhotosUI
 
-/// 新建工作项的表单，App 里和分享扩展里用的是同一份。
+/// 新建工作项：大类下拉（五种）→ 类型下拉（接口拉取，含「线上故障」「技术类需求」等）→ 填表。
 struct CreateIssueForm: View {
     var initialText: String = ""
     var initialImages: [URL] = []
+    var showAttachmentPickers = true
     var onCreated: (String) -> Void
     var onCancel: (() -> Void)?
 
     @State private var category: IssueCategory = .bug
+    @State private var types: [WorkItemType] = []
+    @State private var selectedTypeID: String = ""
     @State private var subject = ""
     @State private var detail = ""
     @State private var fields: [YunxiaoClient.FieldDef] = []
@@ -18,7 +20,6 @@ struct CreateIssueForm: View {
     @State private var busy = false
     @State private var loadingFields = false
     @State private var error: String?
-    @State private var tokenInput = ""
     @State private var attachmentImages: [(name: String, data: Data)] = []
     @State private var attachmentFiles: [(name: String, data: Data)] = []
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -26,9 +27,11 @@ struct CreateIssueForm: View {
     @State private var showFilePicker = false
     @State private var showCamera = false
     var showCameraButton = true
-    var showAttachmentPickers = true
-    @State private var savingToken = false
     @FocusState private var typing: Bool
+
+    private var selectedType: WorkItemType? {
+        types.first(where: { $0.id == selectedTypeID })
+    }
 
     private var client: YunxiaoClient {
         YunxiaoClient(orgId: SharedConfig.orgId, projectId: SharedConfig.projectId, token: SharedConfig.token)
@@ -53,14 +56,30 @@ struct CreateIssueForm: View {
             }
 
             Section {
-                Picker("类型", selection: $category) {
+                Picker("大类", selection: $category) {
                     ForEach(IssueCategory.allCases) { Text($0.label).tag($0) }
                 }
-                .pickerStyle(.segmented)
                 .onChange(of: category) {
-                    values = [:]
-                    Task { await loadFields() }
+                    selectedTypeID = ""
+                    Task { await loadTypesAndFields() }
                 }
+
+                if types.isEmpty && loadingTypes {
+                    HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+                } else if types.isEmpty {
+                    Text("该项目没有这类工作项").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Picker("类型", selection: $selectedTypeID) {
+                        ForEach(types) { Text($0.name).tag($0.id) }
+                    }
+                    .onChange(of: selectedTypeID) {
+                        Task { await loadFields() }
+                    }
+                }
+            } header: {
+                Text("类型")
+            } footer: {
+                Text("「线上故障」「技术类需求」这类细分类型也会列出来。")
             }
 
             Section("标题") {
@@ -84,22 +103,6 @@ struct CreateIssueForm: View {
                 }
             }
 
-            if loadingFields {
-                Section { HStack { Spacer(); ProgressView(); Spacer() } }
-            }
-
-            ForEach(fields) { field in
-                Section(field.name) {
-                    Picker("", selection: binding(for: field)) {
-                        ForEach(field.options) { option in
-                            Text(option.value).tag(option.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                }
-            }
-
             if showAttachmentPickers {
                 Section("附件") {
                     AttachmentPicker(images: $attachmentImages,
@@ -114,25 +117,19 @@ struct CreateIssueForm: View {
                 }
             }
 
-            if !initialImages.isEmpty {
-                Section("附件") {
-                    ForEach(initialImages, id: \.self) { url in
-                        HStack(spacing: 10) {
-                            if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFill()
-                                    .frame(width: 44, height: 44)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            } else {
-                                Image(systemName: "doc").frame(width: 44, height: 44)
-                            }
-                            Text(url.lastPathComponent)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+            if loadingFields {
+                Section { HStack { Spacer(); ProgressView().controlSize(.small); Spacer() } }
+            }
+
+            ForEach(fields) { field in
+                Section(field.name) {
+                    Picker("", selection: binding(for: field)) {
+                        ForEach(field.options) { option in
+                            Text(option.value).tag(option.id)
                         }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
                 }
             }
 
@@ -158,7 +155,7 @@ struct CreateIssueForm: View {
                     ProgressView()
                 } else {
                     Button("创建") { Task { await submit() } }
-                        .disabled(!SharedConfig.configured || subject.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(!SharedConfig.configured || selectedTypeID.isEmpty || subject.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
             ToolbarItemGroup(placement: .keyboard) {
@@ -187,23 +184,28 @@ struct CreateIssueForm: View {
                 }
             }
         }
-        .task {
-            if subject.isEmpty {
-                let firstLine = initialText
-                    .split(separator: "\n", omittingEmptySubsequences: true)
-                    .first.map(String.init) ?? ""
-                subject = String(firstLine.prefix(80))
-                detail = initialText
-            }
-            await loadFields()
-        }
+        .task { await loadTypesAndFields() }
     }
 
-    private func binding(for field: YunxiaoClient.FieldDef) -> Binding<String> {
-        Binding(
-            get: { values[field.id] ?? field.defaultValue ?? field.options.first?.id ?? "" },
-            set: { values[field.id] = $0 }
-        )
+    // MARK: - 数据
+
+    @State private var tokenInput = ""
+    @State private var loadingTypes = false
+
+    private func loadTypesAndFields() async {
+        loadingTypes = true
+        defer { loadingTypes = false }
+        guard SharedConfig.configured else { return }
+        do {
+            types = try await client.workitemTypes(category: category)
+            selectedTypeID = (types.first(where: { $0.isDefault }) ?? types.first)?.id ?? ""
+            await loadFields()
+            error = nil
+        } catch {
+            types = WorkItemType.fallback
+            selectedTypeID = ""
+            self.error = error.localizedDescription
+        }
     }
 
     private func saveToken() {
@@ -213,7 +215,30 @@ struct CreateIssueForm: View {
         if SharedConfig.orgId.isEmpty { SharedConfig.orgId = "68359a6af957ee9df431ecaa" }
         if SharedConfig.projectId.isEmpty { SharedConfig.projectId = "854d2f7e0a466c8d4e3dd69c85" }
         tokenInput = ""
-        Task { await loadFields() }
+        Task { await loadTypesAndFields() }
+    }
+
+    private func binding(for field: YunxiaoClient.FieldDef) -> Binding<String> {
+        Binding(
+            get: { values[field.id] ?? field.defaultValue ?? field.options.first?.id ?? "" },
+            set: { values[field.id] = $0 }
+        )
+    }
+
+    private func loadFields() async {
+        guard !selectedTypeID.isEmpty else { return }
+        loadingFields = true
+        defer { loadingFields = false }
+        do {
+            fields = try await client.requiredFields(typeID: selectedTypeID)
+            var initial: [String: String] = [:]
+            for field in fields {
+                initial[field.id] = field.defaultValue ?? field.options.first?.id
+            }
+            values = initial
+        } catch {
+            fields = []
+        }
     }
 
     private func loadPicked(_ item: PhotosPickerItem) async {
@@ -222,37 +247,18 @@ struct CreateIssueForm: View {
         attachmentImages.append((name, data))
     }
 
-    private func loadFields() async {
-        guard SharedConfig.configured else { return }
-        loadingFields = true
-        defer { loadingFields = false }
-        do {
-            let typeID = try await client.workitemTypeID(category: category)
-            fields = try await client.requiredFields(typeID: typeID)
-            var initial: [String: String] = [:]
-            for field in fields {
-                initial[field.id] = field.defaultValue ?? field.options.first?.id
-            }
-            values = initial
-            error = nil
-        } catch {
-            fields = []
-            self.error = error.localizedDescription
-        }
-    }
-
     private func submit() async {
         busy = true
         error = nil
         defer { busy = false }
         do {
             let subjectValue = subject.trimmingCharacters(in: .whitespacesAndNewlines)
-            // 先建单，再把附件传上去；图片的 embedUrl 嵌进描述
             let id = try await client.createIssue(
                 category: category,
                 subject: subjectValue,
-                description: detail,
-                customValues: values
+                description: composedDetail(),
+                customValues: values,
+                typeID: selectedTypeID
             )
             var embeds: [String] = []
             for (name, data) in attachmentImages {
@@ -278,5 +284,18 @@ struct CreateIssueForm: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// 分享进来的图片内联进描述。
+    private func composedDetail() -> String {
+        guard attachmentImages.isEmpty else { return detail }
+        var parts = [detail]
+        for url in initialImages {
+            guard let raw = try? Data(contentsOf: url),
+                  let image = UIImage(data: raw),
+                  let png = image.pngData() else { continue }
+            parts.append("<img src=\"data:image/png;base64,\(png.base64EncodedString())\" />")
+        }
+        return parts.joined(separator: "\n\n")
     }
 }
