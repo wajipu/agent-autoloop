@@ -230,29 +230,32 @@ struct CreateIssueForm: View {
         error = nil
         defer { busy = false }
         do {
+            let subjectValue = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 先建单，再把附件传上去；图片的 embedUrl 嵌进描述
             let id = try await client.createIssue(
                 category: category,
-                subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
-                description: composedDetail(),
+                subject: subjectValue,
+                description: detail,
                 customValues: values
             )
+            var embeds: [String] = []
+            for item in picked {
+                let embed = try await client.uploadAttachment(issueID: id, name: item.name, data: item.data)
+                if item.name.lowercased().hasPrefix("image") { embeds.append("<img src=\"\(embed)\" />") }
+                else { embeds.append("附件：\(embed)") }
+            }
+            for url in initialImages {
+                let raw = (try? Data(contentsOf: url)) ?? Data()
+                guard !raw.isEmpty else { continue }
+                let embed = try await client.uploadAttachment(issueID: id, name: url.lastPathComponent, data: raw)
+                embeds.append("<img src=\"\(embed)\" />")
+            }
+            if !embeds.isEmpty {
+                try await client.appendDescription(issueID: id, addition: embeds.joined(separator: "\n"))
+            }
             onCreated(id)
         } catch {
             self.error = error.localizedDescription
         }
-    }
-
-    /// 分享进来的图片内联进描述（云效令牌接口没有附件上传）。
-    private func composedDetail() -> String {
-        var parts = [detail]
-        for url in initialImages {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let mime = url.pathExtension.lowercased() == "jpg" ? "jpeg" : "png"
-            parts.append("<img src=\"data:image/\(mime);base64,\(data.base64EncodedString())\" />")
-        }
-        for item in picked {
-            parts.append("<img src=\"data:image/png;base64,\(item.data.base64EncodedString())\" />")
-        }
-        return parts.joined(separator: "\n\n")
     }
 }

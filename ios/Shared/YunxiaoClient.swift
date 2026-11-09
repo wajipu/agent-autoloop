@@ -103,6 +103,59 @@ struct YunxiaoClient {
         }
     }
 
+    /// 把附件的嵌入地址追加到工作项描述末尾。
+    func appendDescription(issueID: String, addition: String) async throws {
+        let detailPath = "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)"
+        let current = try await request(path: detailPath, method: "GET", body: nil)
+        let object = try? JSONSerialization.jsonObject(with: current) as? [String: Any]
+        guard let raw = object?["description"] else { throw YunxiaoError.decoding("拿不到原描述") }
+        var html = ""
+        if let text = raw as? String {
+            html = text
+        } else if let wrapped = raw as? [String: Any], let value = wrapped["htmlValue"] as? String {
+            html = value
+        }
+        if html.trimmingCharacters(in: .whitespaces).hasPrefix("{"),
+           let data = html.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let value = parsed["htmlValue"] as? String {
+            html = value
+        }
+        let merged = (html + "\n" + addition).trimmingCharacters(in: .whitespacesAndNewlines)
+        try await request(path: detailPath, method: "PUT",
+                          body: ["description": merged.isEmpty ? addition : merged])
+    }
+
+    /// 上传附件（任何文件都能传），返回 embedUrl（图片可直接嵌进描述）。
+    func uploadAttachment(issueID: String, name: String, data: Data) async throws -> String {
+        guard let url = URL(string: base.absoluteString + "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)/attachments") else {
+            throw YunxiaoError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(token, forHTTPHeaderField: "x-yunxiao-token")
+        let boundary = "autoloop-\(UUID().uuidString)"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        body.append(data)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+        request.timeoutInterval = 60
+
+        let (responseData, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw YunxiaoError.http(code, String(data: responseData.prefix(200), encoding: .utf8) ?? "")
+        }
+        let object = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any]
+        if let embed = object?["embedUrl"] as? String, !embed.isEmpty { return embed }
+        if let html = object?["embedHtml"] as? String { return html }
+        throw YunxiaoError.decoding("上传成功但没拿到嵌入地址")
+    }
+
     /// 建一条工作项，返回新工单 id。
     func createIssue(category: IssueCategory,
                      subject: String,

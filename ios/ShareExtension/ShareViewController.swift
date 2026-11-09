@@ -105,20 +105,31 @@ final class ShareViewController: UIViewController {
 
     private func saveFile(_ provider: NSItemProvider, prefix: String) async -> [String: String]? {
         guard let folder = ShareInbox.folder else { return nil }
-        let name = "\(prefix)-\(UUID().uuidString).\(prefix == "image" ? "png" : "dat")"
-        let target = folder.appendingPathComponent(name)
-
-        let data: Data? = await withCheckedContinuation { continuation in
-            provider.loadFileRepresentation(forTypeIdentifier: provider.registeredTypeIdentifiers.first ?? UTType.data.identifier) { url, _ in
-                guard let url, let data = try? Data(contentsOf: url) else {
-                    continuation.resume(returning: nil)
-                    return
+        let candidates = [UTType.image.identifier, UTType.movie.identifier, UTType.data.identifier]
+        for type in candidates where provider.hasItemConformingToTypeIdentifier(type) {
+            let temp: URL? = await withCheckedContinuation { continuation in
+                provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
+                    guard let url else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    // 这个 URL 回调结束就没了，立刻拷到临时目录
+                    let copy = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("share-\(UUID().uuidString).\(url.pathExtension.isEmpty ? "dat" : url.pathExtension)")
+                    try? FileManager.default.copyItem(at: url, to: copy)
+                    continuation.resume(returning: FileManager.default.fileExists(atPath: copy.path) ? copy : nil)
                 }
-                continuation.resume(returning: data)
+            }
+            guard let temp else { continue }
+            let name = "\(prefix)-\(UUID().uuidString).\(temp.pathExtension)"
+            let target = folder.appendingPathComponent(name)
+            try? FileManager.default.removeItem(at: target)
+            if (try? FileManager.default.copyItem(at: temp, to: target)) != nil {
+                try? FileManager.default.removeItem(at: temp)
+                return ["name": name, "kind": prefix]
             }
         }
-        guard let data, (try? data.write(to: target)) != nil else { return nil }
-        return ["name": name, "kind": prefix]
+        return nil
     }
 }
 
@@ -127,8 +138,10 @@ enum ShareInbox {
     static let group = "group.com.wajipu.autoloop"
 
     static var folder: URL? {
-        guard let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { return nil }
-        let dir = root.appendingPathComponent("Shared", isDirectory: true)
+        // 有 App Group 就放共享区；没有（通配 profile）就放扩展自己的临时目录，够本进程用
+        let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("Shared", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
