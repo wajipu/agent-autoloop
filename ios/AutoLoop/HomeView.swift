@@ -84,6 +84,7 @@ struct HomeView: View {
     @ViewBuilder
     private func nowSection(_ state: HubState) -> some View {
         let t = state.totals
+        let active = state.runs.filter { ["claimed", "queued", "unknown"].contains($0.state) }.prefix(4)
         Section("现在") {
             HStack(spacing: 0) {
                 NowStat(value: t.running, label: "在跑", color: .blue)
@@ -94,6 +95,31 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
+
+            if !active.isEmpty { Divider() }
+
+            ForEach(Array(active)) { run in
+                NavigationLink(value: run) {
+                    HStack(spacing: 8) {
+                        Text("#\(run.id)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.tertiary)
+                        Text(run.rule)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                        Spacer()
+                        StateBadge(state: run.state)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+
+            if state.runs.filter({ ["claimed", "queued", "unknown"].contains($0.state) }).count > 4 {
+                Text("还有 \(state.runs.filter { ["claimed", "queued", "unknown"].contains($0.state) }.count - 4) 轮，进「统计」看全部")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 

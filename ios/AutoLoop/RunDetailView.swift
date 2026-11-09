@@ -71,6 +71,17 @@ struct RunDetailView: View {
                 }
             }
 
+            if let events = run.events, !events.isEmpty {
+                let first = events[0]
+                if let subject = first.subject, !subject.isEmpty {
+                    Section("在处理") {
+                        Label(subject, systemImage: "target")
+                            .font(.subheadline.weight(.medium))
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+
             Section("属性") {
                 LabeledContent("接单 Agent", value: run.agent ?? "—")
                 if let created = run.created {
