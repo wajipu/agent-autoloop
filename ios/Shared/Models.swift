@@ -60,11 +60,20 @@ struct RichText: Decodable {
             html = RichText.unwrap(plain)
             return
         }
-        if let object = try? container.decode([String: String].self) {
-            html = object["htmlValue"] ?? ""
+        if let object = try? container.decode(HTMLValue.self) {
+            html = object.htmlValue
             return
         }
         html = ""
+    }
+
+    private struct HTMLValue: Decodable {
+        let htmlValue: String
+    }
+
+    var isHTML: Bool {
+        html.range(of: "^\\s*<(?:html|article|p|div|br|span|h[1-6]|ul|ol|li|strong|b|em|i|a|img|table|pre|blockquote)(?:\\s[^<>]*|\\s*/?)?>",
+                   options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     private static func unwrap(_ text: String) -> String {
@@ -108,7 +117,7 @@ struct WorkitemDetail: Decodable {
 
     var created: Date? { gmtCreate.map { Date(timeIntervalSince1970: $0 / 1000) } }
     var updated: Date? { gmtModified.map { Date(timeIntervalSince1970: $0 / 1000) } }
-    var body: String { description?.text ?? "" }
+    var body: String { description?.html ?? "" }
 }
 
 
@@ -127,4 +136,3 @@ struct WorkItemType: Identifiable, Hashable {
         .init(id: "Req-default", name: "需求", category: .req, isDefault: true),
     ]
 }
-

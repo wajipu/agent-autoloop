@@ -98,12 +98,15 @@ struct IssueDetailView: View {
 
             Section("正文") {
                 if let detail {
-                    if detail.body.isEmpty {
+                    if detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text("这条工作项没有正文")
                             .foregroundStyle(.secondary)
+                    } else if let description = detail.description, description.isHTML {
+                        HTMLDescription(description: description)
                     } else {
                         Markdown(detail.body)
                             .markdownTheme(.gitHub)
+                            .markdownSoftBreakMode(.lineBreak)
                     }
                 } else if let error {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -326,5 +329,53 @@ struct IssueDetailView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+private struct HTMLDescription: UIViewRepresentable {
+    let description: RichText
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isScrollEnabled = false
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        let traits = view.traitCollection.modifyingTraits {
+            $0.userInterfaceStyle = colorScheme == .dark ? .dark : .light
+        }
+        let color = UIColor.label.resolvedColor(with: traits)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let foreground = String(format: "#%02X%02X%02X", Int(red * 255), Int(green * 255), Int(blue * 255))
+        let fontSize = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize
+        let html = """
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>body { font: \(fontSize)px -apple-system; color: \(foreground); margin: 0; }
+        p { margin: 0 0 0.7em; } img { max-width: 100%; height: auto; }</style></head>
+        <body>\(description.html)</body></html>
+        """
+        if let data = html.data(using: .utf8),
+           let attributed = try? NSAttributedString(data: data, options: [.documentType: NSAttributedString.DocumentType.html,
+                                                                           .characterEncoding: String.Encoding.utf8.rawValue],
+                                                      documentAttributes: nil) {
+            view.attributedText = attributed
+        } else {
+            view.text = description.text
+            view.font = .preferredFont(forTextStyle: .body)
+            view.textColor = .label
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     }
 }
