@@ -38,7 +38,7 @@ final class ShareViewController: UIViewController {
                    let value = await loadText(provider) {
                     text.append(value)
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
-                          let value = await loadText(provider) {
+                          let value = await loadURL(provider) {
                     text.append(value)
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier),
                           let saved = await saveFile(provider, prefix: "image") {
@@ -82,6 +82,20 @@ final class ShareViewController: UIViewController {
                     continuation.resume(returning: text.string)
                 } else if let url = item as? URL {
                     continuation.resume(returning: url.absoluteString)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    private func loadURL(_ provider: NSItemProvider) async -> String? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+                if let url = item as? URL {
+                    continuation.resume(returning: url.absoluteString)
+                } else if let data = item as? Data, let text = String(data: data, encoding: .utf8) {
+                    continuation.resume(returning: text)
                 } else {
                     continuation.resume(returning: nil)
                 }

@@ -7,7 +7,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    DEVELOPMENT_TEAM: NNKU8XZHA4
+    DEVELOPMENT_TEAM: QNW2755VM5
 packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui

@@ -15,6 +15,8 @@ struct CreateIssueForm: View {
     @State private var busy = false
     @State private var loadingFields = false
     @State private var error: String?
+    @State private var tokenInput = ""
+    @State private var savingToken = false
     @FocusState private var typing: Bool
 
     private var client: YunxiaoClient {
@@ -25,9 +27,17 @@ struct CreateIssueForm: View {
         Form {
             if !SharedConfig.configured {
                 Section {
-                    Label("还没配云效令牌，去 App 的「设置 → 云效」填一下", systemImage: "key")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
+                    SecureField("粘贴云效令牌（pt-...）", text: $tokenInput)
+                        .font(.footnote.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($typing)
+                    Button("保存令牌") { saveToken() }
+                        .disabled(tokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } header: {
+                    Text("云效令牌")
+                } footer: {
+                    Text("和 App「设置 → 云效」里那串一样，这里填一次就记住了。")
                 }
             }
 
@@ -140,6 +150,16 @@ struct CreateIssueForm: View {
             get: { values[field.id] ?? field.defaultValue ?? field.options.first?.id ?? "" },
             set: { values[field.id] = $0 }
         )
+    }
+
+    private func saveToken() {
+        let value = tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        SharedConfig.token = value
+        if SharedConfig.orgId.isEmpty { SharedConfig.orgId = "68359a6af957ee9df431ecaa" }
+        if SharedConfig.projectId.isEmpty { SharedConfig.projectId = "854d2f7e0a466c8d4e3dd69c85" }
+        tokenInput = ""
+        Task { await loadFields() }
     }
 
     private func loadFields() async {
