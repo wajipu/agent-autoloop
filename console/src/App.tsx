@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { BottomTabs, type View } from "@/components/BottomTabs";
+import { IssuesView } from "@/components/IssuesView";
 import { OverviewView } from "@/components/OverviewView";
 import { RunsView } from "@/components/RunsView";
 import { SettingsView } from "@/components/SettingsView";
@@ -12,9 +13,17 @@ import { hms } from "@/lib/format";
 import type { HubState } from "@/types";
 
 export default function App() {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>(() => {
+    const hash = window.location.hash.replace("#", "");
+    return (["overview", "issues", "runs", "submit", "settings"] as string[]).includes(hash) ? (hash as View) : "overview";
+  });
   const [nonce, setNonce] = useState(0);
   const [updated, setUpdated] = useState<string>("");
+
+  const go = useCallback((next: View) => {
+    setView(next);
+    window.location.hash = next;
+  }, []);
 
   const bump = useCallback(() => setNonce((n) => n + 1), []);
   const onState = useCallback((st: HubState) => setUpdated(st.now), []);
@@ -28,10 +37,10 @@ export default function App() {
   }, [view, bump]);
 
   useEffect(() => {
-    const go = () => setView("settings");
-    window.addEventListener("al-go-settings", go);
-    return () => window.removeEventListener("al-go-settings", go);
-  }, []);
+    const jump = () => go("settings");
+    window.addEventListener("al-go-settings", jump);
+    return () => window.removeEventListener("al-go-settings", jump);
+  }, [go]);
 
   return (
     <div className="min-h-dvh">
@@ -52,12 +61,13 @@ export default function App() {
 
       <main className="mx-auto max-w-2xl px-3 pt-3 pb-[calc(72px+env(safe-area-inset-bottom))]">
         {view === "overview" && <OverviewView nonce={nonce} onState={onState} />}
+        {view === "issues" && <IssuesView nonce={nonce} />}
         {view === "runs" && <RunsView nonce={nonce} onState={onState} />}
         {view === "submit" && <SubmitView />}
         {view === "settings" && <SettingsView onSaved={bump} />}
       </main>
 
-      <BottomTabs view={view} onChange={setView} />
+      <BottomTabs view={view} onChange={go} />
       <Toaster />
     </div>
   );
