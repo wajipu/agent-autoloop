@@ -24,8 +24,27 @@ struct IssuesView: View {
     }
 
     private var groups: [(String, [Workitem])] {
-        Dictionary(grouping: shown, by: \.statusName)
-            .sorted { StatusStyle.order($0.key) < StatusStyle.order($1.key) }
+        // 同一状态里：父单在前，子单紧随其父（缩进显示）
+        var out: [(String, [Workitem])] = []
+        for (status, list) in Dictionary(grouping: shown, by: \.statusName).sorted(by: { StatusStyle.order($0.key) < StatusStyle.order($1.key) }) {
+            var ordered: [Workitem] = []
+            var placed = Set<String>()
+            let byParent = Dictionary(grouping: list.filter { !$0.isRoot }) { $0.parentIdentifier ?? "" }
+            for root in list.filter(\.isRoot) {
+                ordered.append(root)
+                placed.insert(root.id)
+                for child in byParent[root.id] ?? [] where !placed.contains(child.id) {
+                    ordered.append(child)
+                    placed.insert(child.id)
+                }
+            }
+            // 没挂到已显示父级的子单，排在最后
+            for item in list where !placed.contains(item.id) {
+                ordered.append(item)
+            }
+            out.append((status, ordered))
+        }
+        return out
     }
 
     var body: some View {
@@ -53,7 +72,7 @@ struct IssuesView: View {
                     Section {
                         ForEach(list) { item in
                             NavigationLink(value: item) {
-                                IssueRow(item: item)
+                                IssueRow(item: item, isChild: !item.isRoot)
                             }
                         }
                     } header: {
@@ -145,7 +164,7 @@ struct IssuesView: View {
         defer { loading = false }
         let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
         do {
-            let fresh = try await client.search(category: category)
+            let fresh = try await client.searchTree(category: category.rawValue)
             items = fresh
             statuses = Array(Set(fresh.map(\.statusName))).sorted { StatusStyle.order($0) < StatusStyle.order($1) }
             error = nil
@@ -157,9 +176,12 @@ struct IssuesView: View {
 
 struct IssueRow: View {
     let item: Workitem
+    var isChild = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
+            Text("")
+                .frame(width: isChild ? 14 : 0)
             Image(systemName: StatusStyle.symbol(item.statusName))
                 .font(.system(size: 15))
                 .foregroundStyle(StatusStyle.color(item.statusName))

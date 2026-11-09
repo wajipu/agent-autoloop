@@ -21,6 +21,23 @@ struct YunxiaoClient {
     let token: String
     private let base = URL(string: "https://openapi-rdc.aliyuncs.com")!
 
+    /// 树形搜索：云效按 parent 关系展开全部层级。
+    func searchTree(category: String, conditions: String? = nil) async throws -> [Workitem] {
+        var body: [String: Any] = [
+            "category": category,
+            "spaceId": projectId,
+            "spaceType": "Project",
+            "searchType": "TREE",
+            "page": 1,
+            "perPage": 100,
+        ]
+        if let conditions { body["conditions"] = conditions }
+        let data = try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems:search",
+                                     method: "POST", body: body)
+        guard let list = try? JSONDecoder().decode([Workitem].self, from: data) else { return [] }
+        return list
+    }
+
     func search(category: IssueCategory, page: Int = 1, perPage: Int = 100) async throws -> [Workitem] {
         guard !token.isEmpty else { throw YunxiaoError.notConfigured }
         let body: [String: Any] = [

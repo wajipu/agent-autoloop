@@ -14,7 +14,13 @@ struct Workitem: Identifiable, Decodable, Hashable {
     let workitemType: Named?
     let gmtModified: Double?
     let categoryId: String?
+    var parentIdentifier: String? = nil
 
+    static let emptyParent = "EMPTY_VALUE"
+
+    var isRoot: Bool {
+        parentIdentifier == nil || parentIdentifier == Self.emptyParent
+    }
     var category: IssueCategory {
         IssueCategory(rawValue: categoryId ?? "") ?? .bug
     }
