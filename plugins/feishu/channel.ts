@@ -4,8 +4,9 @@
 //   "channels": { "feishu": { "key": "…", "user": "ou_xxx" } } in config.json
 //   "channels": { "feishu": { "name": "飞书", "answerers": ["ou_xxx"] } } in rules.json: who may answer.
 import { execFile, spawn } from "node:child_process";
-import readline from "node:readline";
 import type { Card, ChannelContext } from "../../host/channels.ts";
+import { eachLine } from "../../host/lines.ts";
+import { commandLine } from "../../host/command.ts";
 
 /** Feishu sends these values as JSON in a string, which may be empty. */
 function safeJson(text: unknown): any {
@@ -93,8 +94,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   const program = (options.lark as string | undefined) ?? "lark-cli";
   const lark = async (args: string[], input: string) => {
     const printed = await new Promise<string>((resolve, reject) => {
-      const child = execFile(program, args, { encoding: "utf8", timeout: 60_000, signal }, (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      const child = execFile(
+        ...commandLine([program, ...args]),
+        { encoding: "utf8", timeout: 60_000, signal },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       );
       child.stdin!.on("error", reject);
       child.stdin!.end(input);
@@ -111,10 +114,10 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   const updateMessage = (ref: string, content: string) =>
     lark(["im", "messages", "patch", "--message-id", ref, "--as", "bot", "--data", "-"], JSON.stringify({ content }));
 
-  async function sendMessage(cardId: number, content: string) {
+  /** Sends the card's words as a new message, or hands back the one an earlier try with this key already made. */
+  async function sendMessage(key: string, content: string) {
     const target = ["--user-id", owner, "--as", "bot", "--msg-type", "interactive"];
-    // The key is the card alone, not its version: a report that got lost must not make a second message.
-    const once = ["--idempotency-key", `agent-autoloop-card-${cardId}`];
+    const once = ["--idempotency-key", key];
     return (await lark(["im", "+messages-send", ...target, ...once, "--content", "-"], content)).data
       .message_id as string;
   }
@@ -133,8 +136,20 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
       try {
         const content = JSON.stringify(render(card));
         let ref = card.ref;
-        if (ref) await updateMessage(ref, content);
-        else ref = await sendMessage(card.id, content);
+        if (ref) {
+          try {
+            await updateMessage(ref, content);
+          } catch (error) {
+            // The bot may not be the sender of the message it is told to change, and Feishu refuses that outright. An open
+            // card stays as it is: the hub only counts answers on the message it first heard of, whose buttons still work.
+            if (card.state === "open") throw error;
+            // A settled one has no buttons: a second card is worse than one, a card frozen at the version before the answer
+            // is worse than both. The key has the version so that a retry of this one makes no third.
+            log(`card ${card.id}: couldn't update ${ref} (${error}); sending it again`);
+            await sendMessage(`agent-autoloop-card-${card.id}-v${card.version}`, content);
+          }
+          // The key is the card alone, not its version: a report that got lost must not make a second message.
+        } else ref = await sendMessage(`agent-autoloop-card-${card.id}`, content);
         await hub.delivered(card.id, card.version, ref);
       } catch (error) {
         log(`card ${card.id} not sent: ${error}`);
@@ -170,17 +185,15 @@ export default async function feishu({ hub, options, log, signal }: ChannelConte
   async function listen() {
     while (!signal.aborted) {
       // stdin stays open: lark-cli ends an unbounded consume when its stdin closes.
-      const consume = spawn(program, ["event", "consume", "card.action.trigger", "--as", "bot"], {
+      const consume = spawn(...commandLine([program, "event", "consume", "card.action.trigger", "--as", "bot"]), {
         stdio: ["pipe", "pipe", "pipe"],
       });
       // Unheard, this would end the whole hub. A process that never started still closes, which starts it again below.
       consume.on("error", (error) => log(`the click listener couldn't run: ${error}`));
       const stop = () => consume.kill();
       signal.addEventListener("abort", stop);
-      readline.createInterface({ input: consume.stderr }).on("line", (line) => log(line));
-      readline
-        .createInterface({ input: consume.stdout })
-        .on("line", (line) => void clicked(line).catch((error) => log(`click not handled: ${error}`)));
+      eachLine(consume.stderr, log);
+      eachLine(consume.stdout, (line) => void clicked(line).catch((error) => log(`click not handled: ${error}`)));
       await new Promise((resolve) => consume.on("close", resolve));
       signal.removeEventListener("abort", stop);
       if (!signal.aborted) {

@@ -10,7 +10,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 
@@ -23,7 +23,8 @@ after(async () => {
     child.kill("SIGKILL");
     await new Promise((resolve) => child.once("exit", resolve));
   }
-  for (const home of homes) rmSync(home, { recursive: true, force: true });
+  // Windows won't remove a folder a live process works in, and an agent let go just now may not have exited yet.
+  for (const home of homes) rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 const freePort = () =>
@@ -54,7 +55,7 @@ async function install(plugins: Record<string, string> = {}) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AGENT_AUTOLOOP_HOME: home,
-    PATH: `${notifiers}:${process.env.PATH}`,
+    PATH: `${notifiers}${delimiter}${process.env.PATH}`,
   };
   delete env.AGENT_AUTOLOOP_RULES;
   delete env.AGENT_AUTOLOOP_PUBLIC_URL;
@@ -112,9 +113,10 @@ async function until(done: () => boolean | Promise<boolean>, what: string, patie
 const alive = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
 
 test("an agent plugin that can't read what it printed fails that run, and the hub stays up", async () => {
+  // Node itself prints, so the program really runs everywhere: there's no /bin/echo on Windows.
   const it = await install({
     "unreadable/agent.ts": `export default {
-      command: () => ["/bin/echo", "ok"],
+      command: () => [${JSON.stringify(process.execPath)}, "-e", "console.log('ok')"],
       read() { throw new Error("no idea what this says"); },
     };`,
   });
@@ -154,9 +156,19 @@ test("a channel plugin that returns at once doesn't stop the hub answering", asy
   assert.equal(it.said().split("[quick] stopped").length - 1, 1, "it waits before going again");
 });
 
-test("a worker that stops is started again, and the hub stays up", async () => {
+test("a worker that stops is started again, and the hub stays up", async (t) => {
+  // A turn that ends on its own leaves nothing in hand, and an idle worker then sits out its whole fifty-second poll
+  // before it looks at the folder again — so this one holds the turn open until the test writes `release`, and the
+  // folder breaks while a run is still in hand. The two-minute bound is only so that an assertion failing before that
+  // release cannot leave it polling for a file nobody will write.
+  const hold = `const { existsSync } = require("node:fs");
+const release = require("node:path").join(process.env.AGENT_AUTOLOOP_HOME, "release");
+const giveUp = Date.now() + 120_000;
+const look = () => (existsSync(release) || Date.now() > giveUp ? process.exit(0) : setTimeout(look, 50));
+look();`;
   const it = await install({
-    "busy/agent.ts": `export default { command: () => ["sleep", "5"], read: () => ({}) };`,
+    "busy/agent.ts": `const hold = ${JSON.stringify(hold)};
+export default { command: () => [process.execPath, "-e", hold], read: () => ({}) };`,
   });
   edit(join(it.home, "rules.json"), (rules) => {
     for (const agent of Object.values<any>(rules.agents)) {
@@ -164,6 +176,8 @@ test("a worker that stops is started again, and the hub stays up", async () => {
       delete agent.command;
     }
   });
+  // The agent outlives a stopped worker by design, so this lets it go, whether or not the test got that far.
+  t.after(() => writeFileSync(join(it.home, "release"), ""));
   const up = it.up();
   await until(() => answers(it.port), "中台应答");
   assert.equal(it.cli("emit", "try.start", "--subject", "#1").status, 0);
