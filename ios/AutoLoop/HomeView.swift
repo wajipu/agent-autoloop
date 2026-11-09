@@ -84,7 +84,10 @@ struct HomeView: View {
     @ViewBuilder
     private func nowSection(_ state: HubState) -> some View {
         let t = state.totals
-        let active = state.runs.filter { ["claimed", "queued", "unknown"].contains($0.state) }.prefix(4)
+        let active = state.runs
+            .filter { ["claimed", "queued", "unknown"].contains($0.state) }
+            .sorted { ($0.state == "claimed" ? 0 : 1, -$0.id) < ($1.state == "claimed" ? 0 : 1, -$1.id) }
+            .prefix(4)
         Section("现在") {
             HStack(spacing: 0) {
                 NowStat(value: t.running, label: "在跑", color: .blue)
@@ -95,8 +98,7 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
-
-            if !active.isEmpty { Divider() }
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: active.isEmpty ? 8 : 2, trailing: 16))
 
             ForEach(Array(active)) { run in
                 NavigationLink(value: run) {
@@ -111,7 +113,8 @@ struct HomeView: View {
                         Spacer()
                         StateBadge(state: run.state)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 5)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
             }
 
