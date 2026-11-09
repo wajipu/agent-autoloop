@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { rel } from "@/lib/format";
-import { CATEGORIES, listIssues, type Issue, type IssueCategory } from "@/lib/yunxiao";
+import { CATEGORIES, getMeta, listIssues, type Issue, type IssueCategory } from "@/lib/yunxiao";
 
 /** 状态上色：待办类偏黄，进行中偏蓝，结束偏灰。 */
 function statusColor(status: string) {
@@ -18,16 +18,27 @@ function statusColor(status: string) {
 }
 
 export function IssuesView({ nonce }: { nonce: number }) {
-  const [category, setCategory] = useState<IssueCategory>("Bug");
+  const [category, setCategory] = useState<IssueCategory | null>(null);
+  const [org, setOrg] = useState("");
   const [status, setStatus] = useState("");
   const [q, setQ] = useState("");
   const [items, setItems] = useState<Issue[] | null>(null);
   const [statuses, setStatuses] = useState<string[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openSerial, setOpenSerial] = useState<string | null>(null);
+
+  useEffect(() => {
+    getMeta()
+      .then((meta) => {
+        setCategory((now) => now ?? meta.defaultCategory);
+        setOrg([meta.org, meta.project].filter(Boolean).join(" · "));
+      })
+      .catch(() => setCategory((now) => now ?? "Task"));
+  }, []);
 
   const load = useCallback(async () => {
+    if (!category) return;
     setError(null);
     try {
       const answer = await listIssues(category, status, q);
@@ -45,10 +56,13 @@ export function IssuesView({ nonce }: { nonce: number }) {
     return () => clearTimeout(timer);
   }, [load, nonce, q]);
 
-  const current = items?.find((item) => item.identifier === openId) ?? null;
+  const current = items?.find((item) => item.serialNumber === openSerial) ?? null;
+
+  if (!category) return <div className="space-y-2"><Skeleton className="h-9 w-full rounded-lg" /><Skeleton className="h-[62px] rounded-xl" /></div>;
 
   return (
     <div className="space-y-2.5">
+      {org && <p className="px-0.5 text-[11px] text-muted-foreground">{org}</p>}
       <div className="flex gap-1.5">
         {CATEGORIES.map(({ id, label }) => (
           <Button
@@ -100,10 +114,10 @@ export function IssuesView({ nonce }: { nonce: number }) {
 
       {items?.map((issue) => (
         <Button
-          key={issue.identifier}
+          key={issue.id}
           variant="ghost"
           className="h-auto w-full justify-start rounded-xl border bg-card px-3.5 py-3 shadow-sm"
-          onClick={() => setOpenId(issue.identifier)}
+          onClick={() => setOpenSerial(issue.serialNumber)}
         >
           <div className="flex w-full items-start gap-2.5 text-left">
             <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", statusColor(issue.status))} />
@@ -112,6 +126,7 @@ export function IssuesView({ nonce }: { nonce: number }) {
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span className="tabular-nums">{issue.serialNumber}</span>
                 <span className="truncate">{issue.status}</span>
+                {issue.assignee && <span className="truncate">{issue.assignee}</span>}
                 <span className="ml-auto shrink-0">{rel(issue.gmtModified)}</span>
               </div>
             </div>
@@ -129,7 +144,7 @@ export function IssuesView({ nonce }: { nonce: number }) {
         </p>
       )}
 
-      <IssueSheet issue={current} open={openId !== null} onOpenChange={(o) => !o && setOpenId(null)} />
+      <IssueSheet issue={current} open={openSerial !== null} onOpenChange={(o) => !o && setOpenSerial(null)} />
     </div>
   );
 }

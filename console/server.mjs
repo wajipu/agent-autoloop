@@ -6,7 +6,6 @@ import { createServer, request as httpRequest } from "node:http";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join, normalize } from "node:path";
-import { execFile } from "node:child_process";
 
 const ROOT = new URL("./dist/", import.meta.url).pathname;
 const HUB = { host: process.env.HUB_HOST ?? "127.0.0.1", port: Number(process.env.HUB_PORT ?? 28081) };
@@ -23,99 +22,146 @@ const TYPES = {
 
 const YUNXIAO_CONFIG =
   process.env.YUNXIAO_CONFIG ?? join(homedir(), ".agent-autoloop/work/yunxiao-watch/config.json");
-const YUNXIAO_CLI = process.env.YUNXIAO_ALIYUN_CLI ?? "/opt/homebrew/bin/aliyun";
+const YUNXIAO_BASE = process.env.YUNXIAO_BASE ?? "https://openapi-rdc.aliyuncs.com";
 
 function yunxiaoConfig() {
   return JSON.parse(readFileSync(YUNXIAO_CONFIG, "utf8"));
 }
 
-/** 调云效 OpenAPI：AK 只在本机 CLI 里，浏览器看不到。 */
-function devops(action, args, region) {
-  return new Promise((resolve, reject) => {
-    execFile(
-      YUNXIAO_CLI,
-      ["devops", action, ...args, "--region", region],
-      { maxBuffer: 64 * 1024 * 1024, timeout: 30000 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const text = String(stderr || stdout || error.message).replace(/\x1b\[[0-9;]*m/g, "").trim();
-          reject(new Error(text.split("\n").slice(0, 3).join(" / ").slice(0, 300)));
-          return;
-        }
-        try {
-          resolve(JSON.parse(stdout));
-        } catch {
-          reject(new Error("云效返回的不是 JSON"));
-        }
-      },
-    );
+/** 令牌：环境变量优先，其次 config 指的 env 文件。浏览器永远拿不到。 */
+function yunxiaoToken(config) {
+  const name = config.org.tokenEnv ?? "YUNXIAO_TOKEN";
+  if (process.env[name]) return process.env[name];
+  const file = config.org.envFile?.replace(/^~/, homedir());
+  if (!file || !existsSync(file)) return "";
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const cut = trimmed.indexOf("=");
+    if (cut > 0 && trimmed.slice(0, cut).trim() === name) {
+      return trimmed.slice(cut + 1).trim().replace(/^["']|["']$/g, "");
+    }
+  }
+  return "";
+}
+
+async function yunxiaoApi(config, path, init = {}) {
+  const res = await fetch(`${YUNXIAO_BASE}${path}`, {
+    ...init,
+    headers: {
+      "x-yunxiao-token": yunxiaoToken(config),
+      accept: "application/json",
+      ...(init.body ? { "content-type": "application/json" } : {}),
+    },
+    signal: AbortSignal.timeout(30000),
   });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`云效返回 ${res.status}：${text.slice(0, 160)}`);
+  return JSON.parse(text);
+}
+
+function workitemUrl(config, item) {
+  return encodeURI(
+    (config.link ?? "https://devops.aliyun.com/projex/project/{projectId}/workitem/{workitemId}")
+      .replace("{projectId}", config.projectId)
+      .replace("{organizationId}", config.org.id)
+      .replace("{workitemId}", item.id)
+      .replace("{serialNumber}", item.serialNumber ?? ""),
+  );
 }
 
 const slim = (item, config) => ({
-  identifier: item.identifier,
+  id: item.id,
   serialNumber: item.serialNumber,
   subject: item.subject,
-  status: item.status,
-  category: item.categoryIdentifier,
-  assignedTo: item.assignedTo,
+  status: item.status?.name ?? "",
+  category: item.workitemType?.name ?? "",
+  assignee: item.assignedTo?.name ?? "",
   gmtCreate: item.gmtCreate,
   gmtModified: item.gmtModified,
-  url: encodeURI(
-    (config.link ?? "https://devops.aliyun.com/projex/project/{projectId}/workitem/{workitemId}")
-      .replace("{projectId}", config.projectId)
-      .replace("{organizationId}", config.organizationId)
-      .replace("{workitemId}", item.identifier),
-  ),
+  url: workitemUrl(config, item),
 });
+
+/** 富文本正文转纯文本。 */
+function htmlToText(html) {
+  return html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, "")
+    .replace(/<\/(p|div|li|h[1-6]|tr|article)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 async function yunxiao(req, res, url) {
   const config = yunxiaoConfig();
-  const region = config.region ?? "cn-hangzhou";
   const send = (code, body) => {
     res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
   };
+  const org = config.org.id;
 
-  const detailMatch = url.pathname.match(/^\/yunxiao\/items\/([A-Za-z0-9]+)$/);
+  const detailMatch = url.pathname.match(/^\/yunxiao\/items\/([A-Za-z0-9-]+)$/);
   try {
     if (detailMatch) {
-      const body = await devops(
-        "GetWorkItemInfo",
-        ["--organizationId", config.organizationId, "--workitemId", detailMatch[1]],
-        region,
+      const item = await yunxiaoApi(
+        config,
+        `/oapi/v1/projex/organizations/${org}/workitems/${encodeURIComponent(detailMatch[1])}`,
       );
-      if (body.success === false) return send(502, { error: body.errorMsg || "云效拒绝了这次查询" });
-      const item = body.workitem ?? {};
+      const raw = item.description;
+      let text = typeof raw === "string" ? raw : (raw?.htmlValue ?? "");
+      if (typeof text === "string" && text.trim().startsWith("{")) {
+        try {
+          text = JSON.parse(text)?.htmlValue ?? "";
+        } catch {
+          /* 不是 JSON，原样当正文 */
+        }
+      }
       return send(200, {
         ...slim(item, config),
-        document: item.document ?? "",
-        tags: (item.tag ?? []).map((tag) => tag.name).filter(Boolean),
+        document: text ? (text.includes("<") ? htmlToText(text) : text.trim()) : "",
+        labels: (item.labels ?? []).map((label) => label.name).filter(Boolean),
+      });
+    }
+
+    if (url.pathname === "/yunxiao/meta") {
+      let projectName = "";
+      try {
+        const project = await yunxiaoApi(config, `/oapi/v1/projex/organizations/${org}/projects/${config.projectId}`);
+        projectName = project.name ?? "";
+      } catch {
+        /* 项目名拿不到不影响用 */
+      }
+      return send(200, {
+        org: config.org.name ?? config.org.id,
+        project: projectName,
+        defaultCategory: config.defaultCategory ?? "Task",
       });
     }
 
     if (url.pathname === "/yunxiao/items") {
-      const category = url.searchParams.get("category") || "Bug";
+      const category = url.searchParams.get("category") || "Task";
       const status = url.searchParams.get("status") || "";
       const q = (url.searchParams.get("q") || "").trim().toLowerCase();
-      const body = await devops(
-        "ListWorkitems",
-        [
-          "--organizationId",
-          config.organizationId,
-          "--spaceType",
-          "Project",
-          "--spaceIdentifier",
-          config.projectId,
-          "--category",
-          category,
-          "--maxResults",
-          "200",
-        ],
-        region,
-      );
-      if (body.success === false) return send(502, { error: body.errorMsg || "云效拒绝了这次查询" });
-      let items = (body.workitems ?? []).map((item) => slim(item, config));
+      const all = [];
+      for (let page = 1; page <= 5; page += 1) {
+        const batch = await yunxiaoApi(config, `/oapi/v1/projex/organizations/${org}/workitems:search`, {
+          method: "POST",
+          body: JSON.stringify({ category, spaceId: config.projectId, spaceType: "Project", page, perPage: 100 }),
+        });
+        const list = Array.isArray(batch) ? batch : [];
+        all.push(...list);
+        if (list.length < 100) break;
+      }
+      let items = all.map((item) => slim(item, config));
+      const statuses = [...new Set(items.map((item) => item.status).filter(Boolean))];
       if (status) items = items.filter((item) => item.status === status);
       if (q) {
         items = items.filter(
@@ -124,8 +170,7 @@ async function yunxiao(req, res, url) {
             String(item.serialNumber ?? "").toLowerCase().includes(q),
         );
       }
-      const statuses = [...new Set((body.workitems ?? []).map((item) => item.status).filter(Boolean))];
-      return send(200, { total: body.totalCount ?? items.length, items, statuses });
+      return send(200, { total: all.length, items, statuses });
     }
   } catch (error) {
     return send(502, { error: String(error.message ?? error) });

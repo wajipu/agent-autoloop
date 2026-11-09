@@ -33,7 +33,7 @@ export function IssueSheet({
     if (!open || !issue) return;
     setDetail(null);
     setError(null);
-    getIssue(issue.identifier)
+    getIssue(issue.serialNumber)
       .then(setDetail)
       .catch((e) => setError((e as Error).message));
   }, [open, issue]);
@@ -53,10 +53,11 @@ export function IssueSheet({
 
         <div className="space-y-3 px-4 pb-6">
           <div>
-            <MetaRow label="类型">{issue.category === "Bug" ? "缺陷" : issue.category === "Task" ? "任务" : "需求"}</MetaRow>
+            <MetaRow label="类型">{issue.category || "—"}</MetaRow>
+            {issue.assignee ? <MetaRow label="负责人">{issue.assignee}</MetaRow> : null}
             <MetaRow label="创建">{mdhm(issue.gmtCreate)}</MetaRow>
             <MetaRow label="更新">{mdhm(issue.gmtModified)}</MetaRow>
-            {detail?.tags?.length ? <MetaRow label="标签">{detail.tags.join("、")}</MetaRow> : null}
+            {detail?.labels?.length ? <MetaRow label="标签">{detail.labels.join("、")}</MetaRow> : null}
           </div>
 
           <Separator />
