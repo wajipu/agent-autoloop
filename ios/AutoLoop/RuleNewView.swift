@@ -131,11 +131,16 @@ struct RuleNewView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("新增规则")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("取消") { dismiss() }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { endEditing() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("保存") { save() }

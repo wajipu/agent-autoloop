@@ -50,6 +50,73 @@ struct YunxiaoClient {
         }
     }
 
+    // MARK: 创建
+
+    /// 当前令牌对应的用户 id，创建工作项时当默认负责人。
+    func currentUserID() async throws -> String {
+        let data = try await request(path: "/oapi/v1/platform/user", method: "GET", body: nil)
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let id = object?["id"] as? String else { throw YunxiaoError.decoding("拿不到用户 id") }
+        return id
+    }
+
+    private func workitemTypeID(category: IssueCategory) async throws -> String {
+        let path = "/oapi/v1/projex/organizations/\(orgId)/projects/\(projectId)/workitemTypes?category=\(category.rawValue)"
+        let data = try await request(path: path, method: "GET", body: nil)
+        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              let chosen = list.first(where: { $0["defaultType"] as? Bool == true }) ?? list.first,
+              let id = chosen["id"] as? String
+        else { throw YunxiaoError.decoding("这个项目没有「\(category.label)」类型") }
+        return id
+    }
+
+    /// 这个类型必填、又不在标准字段里的那些，用默认值补上。
+    private func requiredCustomFields(typeID: String) async throws -> [String: String] {
+        let path = "/oapi/v1/projex/organizations/\(orgId)/projects/\(projectId)/workitemTypes/\(typeID)/fields"
+        let data = try await request(path: path, method: "GET", body: nil)
+        guard let fields = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [:] }
+        let standard: Set<String> = ["subject", "description", "assignedTo", "verifier", "participants",
+                                     "trackers", "tag", "sprint", "versions", "status", "priority", "seriousLevel"]
+        var values: [String: String] = [:]
+        for field in fields {
+            guard field["required"] as? Bool == true,
+                  let id = field["id"] as? String,
+                  let options = field["options"] as? [[String: Any]],
+                  !options.isEmpty
+            else { continue }
+            // 优先级、严重程度这类也是自定义字段，标准字段名里没有对应参数，同样要填
+            if standard.contains(id), !["priority", "seriousLevel"].contains(id) { continue }
+            if let fallback = field["defaultValue"] as? String, !fallback.isEmpty {
+                values[id] = fallback
+            } else if let first = options.first?["id"] as? String {
+                values[id] = first
+            }
+        }
+        return values
+    }
+
+    /// 建一条工作项，返回新工单 id。
+    func createIssue(category: IssueCategory, subject: String, description: String) async throws -> String {
+        let typeID = try await workitemTypeID(category: category)
+        let assignee = try await currentUserID()
+        let custom = try await requiredCustomFields(typeID: typeID)
+        var body: [String: Any] = [
+            "subject": subject,
+            "spaceId": projectId,
+            "workitemTypeId": typeID,
+            "assignedTo": assignee,
+        ]
+        if !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["description"] = description
+        }
+        if !custom.isEmpty { body["customFieldValues"] = custom }
+        let data = try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems",
+                                     method: "POST", body: body)
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let id = object?["id"] as? String else { throw YunxiaoError.decoding("建好了但没拿到 id") }
+        return id
+    }
+
     private func request(path: String, method: String, body: [String: Any]?) async throws -> Data {
         var request = URLRequest(url: base.appendingPathComponent(path))
         request.httpMethod = method

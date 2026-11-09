@@ -45,7 +45,8 @@ struct SettingsView: View {
                     Text("密钥只留在这台手机上，不会同步。")
                 }
             }
-            .navigationTitle("设置")
+            .scrollDismissesKeyboard(.interactively)
+        .navigationTitle("设置")
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .hub: HubSettingsView()

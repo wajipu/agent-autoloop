@@ -7,12 +7,37 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: NNKU8XZHA4
 packages:
   MarkdownUI:
     url: https://github.com/gonzalezreal/swift-markdown-ui
     from: 2.4.0
 targets:
+  AutoLoopShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: 交给 AutoLoop
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsImageWithMaxCount: 10
+              NSExtensionActivationSupportsMovieWithMaxCount: 2
+    entitlements:
+      path: ShareExtension/ShareExtension.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop.share
+        TARGETED_DEVICE_FAMILY: "1"
+
   AutoLoop:
     type: application
     platform: iOS
@@ -20,6 +45,10 @@ targets:
       - path: AutoLoop
     dependencies:
       - package: MarkdownUI
+      - target: AutoLoopShare
+        embed: true
+    entitlements:
+      path: AutoLoop/AutoLoop.entitlements
     info:
       path: AutoLoop/Info.plist
       properties:
@@ -40,5 +69,4 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop
         TARGETED_DEVICE_FAMILY: "1"
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_STYLE: Automatic

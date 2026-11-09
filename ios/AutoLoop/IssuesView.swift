@@ -10,6 +10,8 @@ struct IssuesView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var path = NavigationPath()
+    @State private var creating = false
+    @State private var shared: ShareInboxReader.Payload?
 
     private var shown: [Workitem] {
         items.filter { item in
@@ -72,7 +74,20 @@ struct IssuesView: View {
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜标题或编号")
             .refreshable { await load() }
+            .scrollDismissesKeyboard(.interactively)
+            .sheet(isPresented: $creating) {
+                NavigationStack {
+                    CreateIssueView(prefill: shared) { _ in
+                        if let shared { ShareInboxReader.clean(shared.files) }
+                        shared = nil
+                        Task { await load() }
+                    }
+                }
+            }
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Picker("状态", selection: $statusFilter) {
@@ -102,6 +117,10 @@ struct IssuesView: View {
                 }
             }
             .task {
+                if let inbox = ShareInboxReader.take() {
+                    shared = inbox
+                    creating = true
+                }
                 category = settings.defaultCategory
                 await load()
                 // 演示/截图用：SIMCTL_CHILD_OPEN_SERIAL=MGMF-40 直接打开某一条

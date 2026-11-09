@@ -69,6 +69,7 @@ struct AgentsView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Agent")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -240,6 +241,10 @@ struct AgentEditView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("取消") { dismiss() }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { endEditing() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("保存") { save() }.disabled(!valid)

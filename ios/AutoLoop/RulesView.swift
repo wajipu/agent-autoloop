@@ -229,11 +229,16 @@ struct RuleEditView: View {
                 LabeledContent("状态", value: item.enabled ? "启用中" : "已停用")
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(item.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("取消") { dismiss() }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { endEditing() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("保存") {
