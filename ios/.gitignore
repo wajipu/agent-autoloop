@@ -1,0 +1,6 @@
+build/
+AutoLoop.xcodeproj/
+AutoLoop/Info.plist
+DerivedData/
+*.xcuserstate
+xcuserdata/

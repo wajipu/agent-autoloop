@@ -1,0 +1,40 @@
+name: AutoLoop
+options:
+  bundleIdPrefix: com.wajipu
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: ""
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.0
+targets:
+  AutoLoop:
+    type: application
+    platform: iOS
+    sources:
+      - path: AutoLoop
+    dependencies:
+      - package: MarkdownUI
+    info:
+      path: AutoLoop/Info.plist
+      properties:
+        CFBundleDisplayName: AutoLoop
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Automatic
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
