@@ -18,6 +18,7 @@ targets:
     platform: iOS
     sources:
       - path: ShareExtension
+      - path: Shared
     info:
       path: ShareExtension/Info.plist
       properties:
@@ -43,6 +44,7 @@ targets:
     platform: iOS
     sources:
       - path: AutoLoop
+      - path: Shared
     dependencies:
       - package: MarkdownUI
       - target: AutoLoopShare

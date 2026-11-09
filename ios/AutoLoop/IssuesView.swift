@@ -10,7 +10,7 @@ struct IssuesView: View {
     @State private var loading = false
     @State private var error: String?
     @State private var path = NavigationPath()
-    @State private var creating = false
+    @State private var creating = ProcessInfo.processInfo.environment["OPEN_CREATE"] == "1"
     @State private var shared: ShareInboxReader.Payload?
 
     private var shown: [Workitem] {
@@ -77,9 +77,11 @@ struct IssuesView: View {
             .scrollDismissesKeyboard(.interactively)
             .sheet(isPresented: $creating) {
                 NavigationStack {
-                    CreateIssueView(prefill: shared) { _ in
+                    CreateIssueForm(initialText: shared?.text ?? "",
+                                    initialImages: shared?.files ?? []) { _ in
                         if let shared { ShareInboxReader.clean(shared.files) }
                         shared = nil
+                        creating = false
                         Task { await load() }
                     }
                 }

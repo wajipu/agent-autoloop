@@ -82,18 +82,3 @@ struct WorkitemDetail: Decodable {
     var updated: Date? { gmtModified.map { Date(timeIntervalSince1970: $0 / 1000) } }
     var body: String { description?.text ?? "" }
 }
-
-enum IssueCategory: String, CaseIterable, Identifiable {
-    case bug = "Bug"
-    case task = "Task"
-    case req = "Req"
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .bug: "缺陷"
-        case .task: "任务"
-        case .req: "需求"
-        }
-    }
-}

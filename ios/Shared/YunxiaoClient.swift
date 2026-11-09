@@ -52,6 +52,18 @@ struct YunxiaoClient {
 
     // MARK: 创建
 
+    struct FieldOption: Identifiable, Hashable {
+        let id: String
+        let value: String
+    }
+
+    struct FieldDef: Identifiable, Hashable {
+        let id: String
+        let name: String
+        let options: [FieldOption]
+        let defaultValue: String?
+    }
+
     /// 当前令牌对应的用户 id，创建工作项时当默认负责人。
     func currentUserID() async throws -> String {
         let data = try await request(path: "/oapi/v1/platform/user", method: "GET", body: nil)
@@ -60,7 +72,7 @@ struct YunxiaoClient {
         return id
     }
 
-    private func workitemTypeID(category: IssueCategory) async throws -> String {
+    func workitemTypeID(category: IssueCategory) async throws -> String {
         let path = "/oapi/v1/projex/organizations/\(orgId)/projects/\(projectId)/workitemTypes?category=\(category.rawValue)"
         let data = try await request(path: path, method: "GET", body: nil)
         guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
@@ -70,46 +82,48 @@ struct YunxiaoClient {
         return id
     }
 
-    /// 这个类型必填、又不在标准字段里的那些，用默认值补上。
-    private func requiredCustomFields(typeID: String) async throws -> [String: String] {
+    /// 这个类型必填、而且要在表单里选的字段（优先级、严重程度这类）。
+    func requiredFields(typeID: String) async throws -> [FieldDef] {
         let path = "/oapi/v1/projex/organizations/\(orgId)/projects/\(projectId)/workitemTypes/\(typeID)/fields"
         let data = try await request(path: path, method: "GET", body: nil)
-        guard let fields = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [:] }
-        let standard: Set<String> = ["subject", "description", "assignedTo", "verifier", "participants",
-                                     "trackers", "tag", "sprint", "versions", "status", "priority", "seriousLevel"]
-        var values: [String: String] = [:]
-        for field in fields {
+        guard let fields = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        let skip: Set<String> = ["subject", "description", "assignedTo", "verifier", "participants",
+                                 "trackers", "tag", "sprint", "versions", "status"]
+        return fields.compactMap { field -> FieldDef? in
             guard field["required"] as? Bool == true,
-                  let id = field["id"] as? String,
-                  let options = field["options"] as? [[String: Any]],
-                  !options.isEmpty
-            else { continue }
-            // 优先级、严重程度这类也是自定义字段，标准字段名里没有对应参数，同样要填
-            if standard.contains(id), !["priority", "seriousLevel"].contains(id) { continue }
-            if let fallback = field["defaultValue"] as? String, !fallback.isEmpty {
-                values[id] = fallback
-            } else if let first = options.first?["id"] as? String {
-                values[id] = first
+                  let id = field["id"] as? String, !skip.contains(id),
+                  let raw = field["options"] as? [[String: Any]], !raw.isEmpty
+            else { return nil }
+            let options = raw.compactMap { option -> FieldOption? in
+                guard let oid = option["id"] as? String else { return nil }
+                return FieldOption(id: oid, value: option["value"] as? String ?? oid)
             }
+            return FieldDef(id: id, name: field["name"] as? String ?? id,
+                            options: options, defaultValue: field["defaultValue"] as? String)
         }
-        return values
     }
 
     /// 建一条工作项，返回新工单 id。
-    func createIssue(category: IssueCategory, subject: String, description: String) async throws -> String {
-        let typeID = try await workitemTypeID(category: category)
-        let assignee = try await currentUserID()
-        let custom = try await requiredCustomFields(typeID: typeID)
+    func createIssue(category: IssueCategory,
+                     subject: String,
+                     description: String,
+                     customValues: [String: String] = [:],
+                     typeID: String? = nil,
+                     assignee: String? = nil) async throws -> String {
+        let type: String
+        if let typeID { type = typeID } else { type = try await workitemTypeID(category: category) }
+        let owner: String
+        if let assignee { owner = assignee } else { owner = try await currentUserID() }
         var body: [String: Any] = [
             "subject": subject,
             "spaceId": projectId,
-            "workitemTypeId": typeID,
-            "assignedTo": assignee,
+            "workitemTypeId": type,
+            "assignedTo": owner,
         ]
         if !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             body["description"] = description
         }
-        if !custom.isEmpty { body["customFieldValues"] = custom }
+        if !customValues.isEmpty { body["customFieldValues"] = customValues }
         let data = try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems",
                                      method: "POST", body: body)
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -118,7 +132,8 @@ struct YunxiaoClient {
     }
 
     private func request(path: String, method: String, body: [String: Any]?) async throws -> Data {
-        var request = URLRequest(url: base.appendingPathComponent(path))
+        guard let url = URL(string: base.absoluteString + path) else { throw YunxiaoError.notConfigured }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue(token, forHTTPHeaderField: "x-yunxiao-token")
         request.setValue("application/json", forHTTPHeaderField: "accept")

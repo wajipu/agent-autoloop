@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
@@ -52,10 +53,24 @@ final class ShareViewController: UIViewController {
             }
         }
 
-        ShareInbox.write(text: text.joined(separator: "\n"), files: files)
-        label.text = "已交给 AutoLoop，打开 App 继续"
-        try? await Task.sleep(for: .milliseconds(600))
-        extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+        let payloadText = text.joined(separator: "\n")
+        let urls = files.compactMap { entry -> URL? in
+            guard let name = entry["name"], let folder = ShareInbox.folder else { return nil }
+            return folder.appendingPathComponent(name)
+        }
+        await MainActor.run {
+            let form = CreateIssueForm(initialText: payloadText, initialImages: urls, onCreated: { _ in
+                self.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+            }, onCancel: {
+                self.extensionContext?.cancelRequest(withError: NSError(domain: "autoloop", code: 0))
+            })
+            let host = UIHostingController(rootView: NavigationStack { form })
+            self.addChild(host)
+            host.view.frame = self.view.bounds
+            host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            self.view.addSubview(host.view)
+            host.didMove(toParent: self)
+        }
     }
 
     private func loadText(_ provider: NSItemProvider) async -> String? {

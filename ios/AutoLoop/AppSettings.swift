@@ -7,13 +7,22 @@ final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
     @Published var token: String {
-        didSet { Keychain.set(token, for: "yunxiao.token") }
+        didSet {
+            Keychain.set(token, for: "yunxiao.token")
+            SharedConfig.token = token
+        }
     }
     @Published var orgId: String {
-        didSet { UserDefaults.standard.set(orgId, forKey: "yunxiao.org") }
+        didSet {
+            UserDefaults.standard.set(orgId, forKey: "yunxiao.org")
+            SharedConfig.orgId = orgId
+        }
     }
     @Published var projectId: String {
-        didSet { UserDefaults.standard.set(projectId, forKey: "yunxiao.project") }
+        didSet {
+            UserDefaults.standard.set(projectId, forKey: "yunxiao.project")
+            SharedConfig.projectId = projectId
+        }
     }
     @Published var defaultCategory: IssueCategory {
         didSet { UserDefaults.standard.set(defaultCategory.rawValue, forKey: "yunxiao.category") }
@@ -47,6 +56,11 @@ final class AppSettings: ObservableObject {
         // 启动时用环境变量注入过一次，就存进钥匙串，之后不用再带
         if stored.isEmpty, !fromEnv.isEmpty { Keychain.set(fromEnv, for: "yunxiao.token") }
         if storedHub.isEmpty, !hubFromEnv.isEmpty { Keychain.set(hubFromEnv, for: "hub.key") }
+
+        // 分享扩展要用同一份配置，写进 App Group
+        SharedConfig.token = token
+        SharedConfig.orgId = orgId
+        SharedConfig.projectId = projectId
     }
 
     var hubConfigured: Bool { !hubURL.isEmpty && !hubKey.isEmpty }
