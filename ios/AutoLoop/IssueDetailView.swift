@@ -46,6 +46,7 @@ struct IssueDetailView: View {
     @State private var flowError: String?
     @State private var comments: [YunxiaoClient.Comment] = []
     @State private var activities: [YunxiaoClient.Activity] = []
+    @State private var children: [Workitem] = []
     @State private var commentDraft = ""
     @State private var postingComment = false
 
@@ -191,6 +192,18 @@ struct IssueDetailView: View {
                 }
             }
 
+            if !children.isEmpty {
+                Section("子单（\(children.count)）") {
+                    ForEach(children) { child in
+                        NavigationLink {
+                            IssueDetailView(item: child)
+                        } label: {
+                            IssueRow(item: child)
+                        }
+                    }
+                }
+            }
+
             if let url = settings.workitemURL(item.id) {
                 Section {
                     Button {
@@ -210,6 +223,7 @@ struct IssueDetailView: View {
         .task {
             await load()
             await loadTalk()
+            await loadChildren()
         }
     }
 
@@ -221,6 +235,18 @@ struct IssueDetailView: View {
             activities = try await client.activities(issueID: item.identifier)
         } catch {
             // 评论拉不到不拦着详情
+        }
+    }
+
+    private func loadChildren() async {
+        guard settings.configured else { return }
+        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        do {
+            // 树形搜索拿全量，筛出本单的直接子单
+            let all = try await client.searchTree(category: item.category.rawValue)
+            children = all.filter { $0.parentIdentifier == item.id }
+        } catch {
+            // 拉不到子单不拦着详情
         }
     }
 
