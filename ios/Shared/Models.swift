@@ -16,6 +16,11 @@ struct Workitem: Identifiable, Decodable, Hashable {
     let categoryId: String?
     var parentIdentifier: String? = nil
 
+    private enum CodingKeys: String, CodingKey {
+        case id, serialNumber, subject, status, assignedTo, workitemType, gmtModified
+        case categoryId, parentIdentifier = "parentId"
+    }
+
     static let emptyParent = "EMPTY_VALUE"
 
     var isRoot: Bool {

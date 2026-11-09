@@ -152,15 +152,13 @@ struct IssuesView: View {
 
     @ViewBuilder
     private var treeSections: some View {
-        let treeDict = Dictionary(grouping: treeNodes) { $0.item.statusName }
-        ForEach(StatusGroup.buildTree(from: treeDict)) { group in
-            Section {
-                ForEach(group.nodes) { node in
-                    TreeNodeRow(node: node, expanded: $expanded, depth: 0)
-                }
-            } header: {
-                sectionHeader(group.status, count: totalNodes(group.nodes))
+        let roots = treeNodes
+        Section {
+            ForEach(roots) { node in
+                TreeNodeRow(node: node, expanded: $expanded, depth: 0)
             }
+        } header: {
+            sectionHeader("全部", count: totalNodes(roots))
         }
     }
 
@@ -203,9 +201,6 @@ struct IssuesView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Button {
                 withAnimation { treeMode.toggle() }
-                if treeMode && expanded.isEmpty {
-                    expanded = defaultExpandedIDs
-                }
             } label: {
                 Image(systemName: treeMode ? "flowchart" : "list.bullet")
             }
@@ -233,18 +228,6 @@ struct IssuesView: View {
         }
     }
 
-    private var defaultExpandedIDs: Set<String> {
-        var result = Set<String>()
-        for parent in items where parent.isRoot {
-            for child in items where child.parentIdentifier == parent.id {
-                if !StatusStyle.isDone(child.statusName) {
-                    result.insert(parent.id)
-                    break
-                }
-            }
-        }
-        return result
-    }
 
     // MARK: 覆盖层
 
@@ -290,9 +273,6 @@ struct IssuesView: View {
             let fresh = try await client.searchTree(category: category.rawValue)
             items = fresh
             statuses = Array(Set(fresh.map(\.statusName))).sorted { StatusStyle.order($0) < StatusStyle.order($1) }
-            if treeMode && expanded.isEmpty {
-                expanded = defaultExpandedIDs
-            }
             error = nil
         } catch {
             self.error = error.localizedDescription
