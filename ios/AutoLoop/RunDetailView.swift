@@ -6,6 +6,7 @@ struct RunDetailView: View {
     let run: HubRun
     @StateObject private var settings = AppSettings.shared
     @State private var steps: [TimelineStep]?
+    @State private var web: WebSheet?
     @State private var error: String?
 
     var body: some View {
@@ -118,8 +119,13 @@ struct RunDetailView: View {
                             if let summary = event.summary, !summary.isEmpty {
                                 Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                             }
-                            if let link = event.link, let url = URL(string: link) {
-                                Link("打开来源", destination: url).font(.caption)
+                            if let link = event.link, let url = URL(string: link), url.scheme?.hasPrefix("http") == true {
+                                Button {
+                                    web = WebSheet(url: url)
+                                } label: {
+                                    Label("打开来源", systemImage: "safari").font(.caption)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.vertical, 2)
@@ -130,8 +136,10 @@ struct RunDetailView: View {
             if let link = run.link, !link.isEmpty {
                 Section("会话") {
                     if let url = URL(string: link), link.hasPrefix("http") {
-                        Link(destination: url) {
-                            Label("打开这一轮的会话", systemImage: "arrow.up.right.square")
+                        Button {
+                            web = WebSheet(url: url)
+                        } label: {
+                            Label("查看这一轮的会话", systemImage: "safari")
                         }
                     } else {
                         Text(link)
@@ -177,6 +185,9 @@ struct RunDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("第 \(run.id) 轮")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $web) { web in
+            SafariSheet(url: web.url)
+        }
         .task { await load() }
     }
 
