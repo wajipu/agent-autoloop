@@ -1,5 +1,7 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
+import PhotosUI
 
 /// 新建工作项的表单，App 里和分享扩展里用的是同一份。
 struct CreateIssueForm: View {
@@ -17,8 +19,14 @@ struct CreateIssueForm: View {
     @State private var loadingFields = false
     @State private var error: String?
     @State private var tokenInput = ""
+    @State private var attachmentImages: [(name: String, data: Data)] = []
+    @State private var attachmentFiles: [(name: String, data: Data)] = []
     @State private var pickerItems: [PhotosPickerItem] = []
-    @State private var picked: [(name: String, data: Data)] = []
+    @State private var showPhotoPicker = false
+    @State private var showFilePicker = false
+    @State private var showCamera = false
+    var showCameraButton = true
+    var showAttachmentPickers = true
     @State private var savingToken = false
     @FocusState private var typing: Bool
 
@@ -84,36 +92,18 @@ struct CreateIssueForm: View {
                 }
             }
 
-            Section {
-                PhotosPicker(selection: $pickerItems, maxSelectionCount: 9, matching: .images) {
-                    Label("添加图片", systemImage: "photo.badge.plus")
-                }
-                .onChange(of: pickerItems) {
-                    Task { await loadPicked() }
-                }
-                ForEach(Array(picked.enumerated()), id: \.offset) { _, item in
-                    HStack(spacing: 10) {
-                        if let image = UIImage(data: item.data) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 44, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        Text(item.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        Spacer()
-                        Button {
-                            picked.removeAll { $0.name == item.name }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
+            if showAttachmentPickers {
+                Section("附件") {
+                    AttachmentPicker(images: $attachmentImages,
+                                     files: $attachmentFiles,
+                                     pickerItems: $pickerItems,
+                                     showPhotoPicker: $showPhotoPicker,
+                                     showFilePicker: $showFilePicker,
+                                     showCamera: $showCamera,
+                                     showCameraButton: showCameraButton) { item in
+                        Task { await loadPicked(item) }
                     }
                 }
-            } header: {
-                Text("图片")
-            } footer: {
-                Text("图片会内联进描述，云效里能直接看到。")
             }
 
             if !initialImages.isEmpty {
@@ -168,6 +158,27 @@ struct CreateIssueForm: View {
                 Button("完成") { typing = false }
             }
         }
+        .sheet(isPresented: $showCamera) {
+            CameraPicker { image in
+                if let data = image.pngData() {
+                    attachmentImages.append(("camera-\(Int(Date().timeIntervalSince1970)).png", data))
+                }
+            }
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $pickerItems, maxSelectionCount: 9, matching: .images)
+        .fileImporter(isPresented: $showFilePicker,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            if let urls = try? result.get() {
+                for url in urls {
+                    let secured = url.startAccessingSecurityScopedResource()
+                    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+                    if let data = try? Data(contentsOf: url) {
+                        attachmentFiles.append((url.lastPathComponent, data))
+                    }
+                }
+            }
+        }
         .task {
             if subject.isEmpty {
                 let firstLine = initialText
@@ -197,13 +208,10 @@ struct CreateIssueForm: View {
         Task { await loadFields() }
     }
 
-    private func loadPicked() async {
-        var next: [(String, Data)] = []
-        for (index, item) in pickerItems.enumerated() {
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-            next.append((item.itemIdentifier ?? "image-\(index).png", data))
-        }
-        picked = next
+    private func loadPicked(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+        let name = item.itemIdentifier ?? "photo-\(Int(Date().timeIntervalSince1970)).png"
+        attachmentImages.append((name, data))
     }
 
     private func loadFields() async {
@@ -239,10 +247,13 @@ struct CreateIssueForm: View {
                 customValues: values
             )
             var embeds: [String] = []
-            for item in picked {
-                let embed = try await client.uploadAttachment(issueID: id, name: item.name, data: item.data)
-                if item.name.lowercased().hasPrefix("image") { embeds.append("<img src=\"\(embed)\" />") }
-                else { embeds.append("附件：\(embed)") }
+            for (name, data) in attachmentImages {
+                let embed = try await client.uploadAttachment(issueID: id, name: name, data: data)
+                embeds.append("<img src=\"\(embed)\" />")
+            }
+            for (name, data) in attachmentFiles {
+                let embed = try await client.uploadAttachment(issueID: id, name: name, data: data)
+                embeds.append("附件：[\(name)](\(embed))")
             }
             for url in initialImages {
                 let raw = (try? Data(contentsOf: url)) ?? Data()
@@ -253,6 +264,8 @@ struct CreateIssueForm: View {
             if !embeds.isEmpty {
                 try await client.appendDescription(issueID: id, addition: embeds.joined(separator: "\n"))
             }
+            attachmentImages = []
+            attachmentFiles = []
             onCreated(id)
         } catch {
             self.error = error.localizedDescription

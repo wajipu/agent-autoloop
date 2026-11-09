@@ -58,6 +58,7 @@ targets:
         CFBundleShortVersionString: "0.2.0"
         CFBundleVersion: "2"
         UILaunchScreen: {}
+        NSCameraUsageDescription: 拍照作为工作项附件
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIUserInterfaceStyle: Automatic
