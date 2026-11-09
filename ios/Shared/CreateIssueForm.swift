@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 /// 新建工作项的表单，App 里和分享扩展里用的是同一份。
 struct CreateIssueForm: View {
@@ -16,6 +17,8 @@ struct CreateIssueForm: View {
     @State private var loadingFields = false
     @State private var error: String?
     @State private var tokenInput = ""
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var picked: [(name: String, data: Data)] = []
     @State private var savingToken = false
     @FocusState private var typing: Bool
 
@@ -79,6 +82,38 @@ struct CreateIssueForm: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                 }
+            }
+
+            Section {
+                PhotosPicker(selection: $pickerItems, maxSelectionCount: 9, matching: .images) {
+                    Label("添加图片", systemImage: "photo.badge.plus")
+                }
+                .onChange(of: pickerItems) {
+                    Task { await loadPicked() }
+                }
+                ForEach(Array(picked.enumerated()), id: \.offset) { _, item in
+                    HStack(spacing: 10) {
+                        if let image = UIImage(data: item.data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        Text(item.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer()
+                        Button {
+                            picked.removeAll { $0.name == item.name }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            } header: {
+                Text("图片")
+            } footer: {
+                Text("图片会内联进描述，云效里能直接看到。")
             }
 
             if !initialImages.isEmpty {
@@ -162,6 +197,15 @@ struct CreateIssueForm: View {
         Task { await loadFields() }
     }
 
+    private func loadPicked() async {
+        var next: [(String, Data)] = []
+        for (index, item) in pickerItems.enumerated() {
+            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            next.append((item.itemIdentifier ?? "image-\(index).png", data))
+        }
+        picked = next
+    }
+
     private func loadFields() async {
         guard SharedConfig.configured else { return }
         loadingFields = true
@@ -200,12 +244,14 @@ struct CreateIssueForm: View {
 
     /// 分享进来的图片内联进描述（云效令牌接口没有附件上传）。
     private func composedDetail() -> String {
-        guard !initialImages.isEmpty else { return detail }
         var parts = [detail]
         for url in initialImages {
             guard let data = try? Data(contentsOf: url) else { continue }
             let mime = url.pathExtension.lowercased() == "jpg" ? "jpeg" : "png"
             parts.append("<img src=\"data:image/\(mime);base64,\(data.base64EncodedString())\" />")
+        }
+        for item in picked {
+            parts.append("<img src=\"data:image/png;base64,\(item.data.base64EncodedString())\" />")
         }
         return parts.joined(separator: "\n\n")
     }
