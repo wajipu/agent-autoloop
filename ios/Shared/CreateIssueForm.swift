@@ -70,10 +70,18 @@ struct CreateIssueForm: View {
             }
 
             Section("描述") {
-                TextEditor(text: $detail)
-                    .frame(minHeight: 140)
-                    .font(.subheadline)
-                    .focused($typing)
+                ZStack(alignment: .topLeading) {
+                    if detail.isEmpty {
+                        Text("补充复现步骤、现场信息或截图说明…")
+                            .font(.subheadline)
+                            .foregroundStyle(.tertiary)
+                            .allowsHitTesting(false)
+                    }
+                    TextEditor(text: $detail)
+                        .frame(minHeight: 140)
+                        .font(.subheadline)
+                        .focused($typing)
+                }
             }
 
             if loadingFields {
