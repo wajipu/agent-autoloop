@@ -180,6 +180,10 @@ struct IssueDetailView: View {
                 .padding(.top, 2)
             }
 
+            if !children.isEmpty {
+                subItemsSection
+            }
+
             if !activities.isEmpty {
                 Section("动态") {
                     ForEach(activities) { activity in
@@ -191,10 +195,6 @@ struct IssueDetailView: View {
                         }
                     }
                 }
-            }
-
-            if !children.isEmpty {
-                subItemsSection
             }
 
             if let url = settings.workitemURL(item.id) {
@@ -268,14 +268,9 @@ struct IssueDetailView: View {
 
     @ViewBuilder
     private var subItemsSection: some View {
-        let shown = showAllChildren ? children : Array(children.prefix(5))
         Section {
-            ForEach(shown) { child in
-                NavigationLink {
-                    IssueDetailView(item: child)
-                } label: {
-                    IssueRow(item: child)
-                }
+            ForEach(Array(children.prefix(5))) { child in
+                childLink(child)
             }
             if children.count > 5 {
                 Button {
@@ -287,8 +282,21 @@ struct IssueDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            if showAllChildren {
+                ForEach(Array(children.dropFirst(5))) { child in
+                    childLink(child)
+                }
+            }
         } header: {
             Text("子单（\(children.count)）")
+        }
+    }
+
+    private func childLink(_ child: Workitem) -> some View {
+        NavigationLink {
+            IssueDetailView(item: child)
+        } label: {
+            IssueRow(item: child)
         }
     }
 
