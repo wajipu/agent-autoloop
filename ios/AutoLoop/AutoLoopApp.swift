@@ -12,6 +12,7 @@ struct AutoLoopApp: App {
 }
 
 struct RootView: View {
+    @StateObject private var settings = AppSettings.shared
     @State private var tab = ProcessInfo.processInfo.environment["OPEN_TAB"] ?? "home"
 
     var body: some View {
@@ -26,5 +27,6 @@ struct RootView: View {
                 .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
                 .tag("settings")
         }
+        .preferredColorScheme(settings.appearance.colorScheme)
     }
 }

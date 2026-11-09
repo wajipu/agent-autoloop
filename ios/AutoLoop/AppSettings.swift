@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import SwiftUI
 
 /// 令牌放钥匙串，企业/项目/类型放 UserDefaults。首次启动用 KoKLam 的默认值。
 final class AppSettings: ObservableObject {
@@ -17,6 +18,9 @@ final class AppSettings: ObservableObject {
     @Published var defaultCategory: IssueCategory {
         didSet { UserDefaults.standard.set(defaultCategory.rawValue, forKey: "yunxiao.category") }
     }
+    @Published var appearance: Appearance {
+        didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "app.appearance") }
+    }
     @Published var hubURL: String {
         didSet { UserDefaults.standard.set(hubURL, forKey: "hub.url") }
     }
@@ -32,6 +36,7 @@ final class AppSettings: ObservableObject {
         orgId = defaults.string(forKey: "yunxiao.org") ?? "68359a6af957ee9df431ecaa"
         projectId = defaults.string(forKey: "yunxiao.project") ?? "854d2f7e0a466c8d4e3dd69c85"
         defaultCategory = IssueCategory(rawValue: defaults.string(forKey: "yunxiao.category") ?? "Task") ?? .task
+        appearance = Appearance(rawValue: defaults.string(forKey: "app.appearance") ?? "system") ?? .system
         hubURL = ProcessInfo.processInfo.environment["HUB_URL"]
             ?? defaults.string(forKey: "hub.url")
             ?? "http://103.236.88.53:28081"
@@ -67,6 +72,25 @@ final class AppSettings: ObservableObject {
 
     var workitemURL: (String) -> URL? {
         { id in URL(string: "https://devops.aliyun.com/projex/project/\(self.projectId)/workitem/\(id)") }
+    }
+}
+
+enum Appearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .system: "跟随系统"
+        case .light: "浅色"
+        case .dark: "深色"
+        }
+    }
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
     }
 }
 

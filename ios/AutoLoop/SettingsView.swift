@@ -31,6 +31,13 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("外观") {
+                    Picker("主题", selection: $settings.appearance) {
+                        ForEach(Appearance.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
                 Section {
                     LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
                     LabeledContent("令牌存放", value: "本机钥匙串")
