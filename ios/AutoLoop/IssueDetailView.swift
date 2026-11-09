@@ -47,6 +47,7 @@ struct IssueDetailView: View {
     @State private var comments: [YunxiaoClient.Comment] = []
     @State private var activities: [YunxiaoClient.Activity] = []
     @State private var children: [Workitem] = []
+    @State private var showAllChildren = false
     @State private var commentDraft = ""
     @State private var postingComment = false
 
@@ -193,15 +194,7 @@ struct IssueDetailView: View {
             }
 
             if !children.isEmpty {
-                Section("子单（\(children.count)）") {
-                    ForEach(children) { child in
-                        NavigationLink {
-                            IssueDetailView(item: child)
-                        } label: {
-                            IssueRow(item: child)
-                        }
-                    }
-                }
+                subItemsSection
             }
 
             if let url = settings.workitemURL(item.id) {
@@ -270,6 +263,31 @@ struct IssueDetailView: View {
             flowError = nil
         } catch {
             flowError = error.localizedDescription
+        }
+    }
+
+    @ViewBuilder
+    private var subItemsSection: some View {
+        let shown = showAllChildren ? children : Array(children.prefix(5))
+        Section {
+            ForEach(shown) { child in
+                NavigationLink {
+                    IssueDetailView(item: child)
+                } label: {
+                    IssueRow(item: child)
+                }
+            }
+            if children.count > 5 {
+                Button {
+                    withAnimation { showAllChildren = true }
+                } label: {
+                    Label("展开其余 \(children.count - 5) 个", systemImage: "chevron.down")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("子单（\(children.count)）")
         }
     }
 

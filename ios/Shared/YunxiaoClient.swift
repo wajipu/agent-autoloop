@@ -288,6 +288,8 @@ struct YunxiaoClient {
                 text = "\(who) 把状态从「\(oldValue)」改成「\(newValue)」"
             case "workitem.commented":
                 text = "\(who) 评论了"
+            case "workitem.association.changed":
+                text = "\(who) 调整了子单关联"
             default:
                 text = "\(who) · \(type)"
             }

@@ -4,6 +4,7 @@ struct IssuesView: View {
     @StateObject private var settings = AppSettings.shared
     @State private var category: IssueCategory = AppSettings.shared.defaultCategory
     @State private var items: [Workitem] = []
+    @State private var allItems: [Workitem] = []
     @State private var statuses: [String] = []
     @State private var statusFilter: String?
     @State private var query = ""
@@ -149,8 +150,15 @@ struct IssuesView: View {
         defer { loading = false }
         let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
         do {
-            let fresh = try await client.searchTree(category: category.rawValue)
+            let all = try await client.searchTree(category: category.rawValue)
+            // 列表只显示主单；子单在主单详情里看
+            let parents = Set(all.map(\.id))
+            let fresh = all.filter { item in
+                guard let pid = item.parentIdentifier, pid != Workitem.emptyParent, !pid.isEmpty else { return true }
+                return !parents.contains(pid)   // 父单不存在（被删/无权限）时也当主单显示
+            }
             items = fresh
+            allItems = all
             statuses = Array(Set(fresh.map(\.statusName))).sorted { StatusStyle.order($0) < StatusStyle.order($1) }
             error = nil
         } catch {
