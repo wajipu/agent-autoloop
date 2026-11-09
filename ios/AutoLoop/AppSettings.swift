@@ -25,7 +25,10 @@ final class AppSettings: ObservableObject {
         }
     }
     @Published var defaultCategory: IssueCategory {
-        didSet { UserDefaults.standard.set(defaultCategory.rawValue, forKey: "yunxiao.category") }
+        didSet {
+            UserDefaults.standard.set(defaultCategory.rawValue, forKey: "yunxiao.category")
+            NotificationCenter.default.post(name: .issueCategoryChanged, object: nil)
+        }
     }
     @Published var appearance: Appearance {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "app.appearance") }
@@ -87,6 +90,10 @@ final class AppSettings: ObservableObject {
     var workitemURL: (String) -> URL? {
         { id in URL(string: "https://devops.aliyun.com/projex/project/\(self.projectId)/workitem/\(id)") }
     }
+}
+
+extension Notification.Name {
+    static let issueCategoryChanged = Notification.Name("issueCategoryChanged")
 }
 
 enum Appearance: String, CaseIterable, Identifiable {

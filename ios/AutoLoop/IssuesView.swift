@@ -2,7 +2,7 @@ import SwiftUI
 
 struct IssuesView: View {
     @StateObject private var settings = AppSettings.shared
-    @State private var category: IssueCategory = .task
+    @State private var category: IssueCategory = AppSettings.shared.defaultCategory
     @State private var items: [Workitem] = []
     @State private var statuses: [String] = []
     @State private var statusFilter: String?

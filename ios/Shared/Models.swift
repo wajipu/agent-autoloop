@@ -20,6 +20,15 @@ struct Workitem: Identifiable, Decodable, Hashable {
     }
     var identifier: String { id }
 
+    /// 轮次详情跳转的占位：只有编号和大概标题，详情页自己拉全量。
+    static func preview(serialNumber: String, subject: String) -> Workitem {
+        Workitem(id: "serial-" + serialNumber,
+                 serialNumber: serialNumber,
+                 subject: subject.isEmpty ? nil : subject,
+                 status: nil, assignedTo: nil, workitemType: nil,
+                 gmtModified: nil, categoryId: nil)
+    }
+
     var statusName: String { status?.name ?? "—" }
     var assigneeName: String? { assignedTo?.name }
     var typeName: String? { workitemType?.name }
@@ -83,6 +92,8 @@ struct WorkitemDetail: Decodable {
     let gmtModified: Double?
     let description: RichText?
     let labels: [Named]?
+    let categoryId: String?
+    let workitemType: Named?
 
     var created: Date? { gmtCreate.map { Date(timeIntervalSince1970: $0 / 1000) } }
     var updated: Date? { gmtModified.map { Date(timeIntervalSince1970: $0 / 1000) } }

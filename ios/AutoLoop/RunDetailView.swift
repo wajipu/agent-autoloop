@@ -75,9 +75,22 @@ struct RunDetailView: View {
                 let first = events[0]
                 if let subject = first.subject, !subject.isEmpty {
                     Section("在处理") {
-                        Label(subject, systemImage: "target")
-                            .font(.subheadline.weight(.medium))
-                            .textSelection(.enabled)
+                        if isWorkitemSerial(subject) {
+                            NavigationLink {
+                                IssueDetailView(item: Workitem.preview(serialNumber: subject, subject: run.summary ?? ""))
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "target")
+                                    Text(subject).font(.subheadline.weight(.medium))
+                                    Spacer()
+                                    Text("查看工单").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                            }
+                        } else {
+                            Label(subject, systemImage: "target")
+                                .font(.subheadline.weight(.medium))
+                                .textSelection(.enabled)
+                        }
                     }
                 }
             }
@@ -188,6 +201,12 @@ struct RunDetailView: View {
         if gap < 3600 { return "\(Int(gap / 60)) 分 \(Int(gap.truncatingRemainder(dividingBy: 60))) 秒" }
         return "\(Int(gap / 3600)) 小时 \(Int((gap / 60).truncatingRemainder(dividingBy: 60))) 分"
     }
+}
+
+/// 看起来像云效工单号：ABC-123 / MGMF-40。
+func isWorkitemSerial(_ text: String) -> Bool {
+    let pattern = "^[A-Z]{2,8}-[0-9]+$"
+    return text.range(of: pattern, options: .regularExpression) != nil
 }
 
 struct TimelineStep: Identifiable {

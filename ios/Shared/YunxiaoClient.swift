@@ -192,6 +192,21 @@ struct YunxiaoClient {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 按编号查工作项（轮次详情跳转用）。详情接口的 id 位接受 serialNumber。
+    func findWorkitem(serialNumber: String) async throws -> Workitem {
+        let detail = try await detail(serialNumber: serialNumber)
+        return Workitem(
+            id: detail.id,
+            serialNumber: detail.serialNumber,
+            subject: detail.subject,
+            status: detail.status,
+            assignedTo: detail.assignedTo,
+            workitemType: detail.workitemType,
+            gmtModified: detail.gmtModified,
+            categoryId: detail.categoryId
+        )
+    }
+
     // MARK: 评论与动态
 
     struct Comment: Identifiable, Hashable {

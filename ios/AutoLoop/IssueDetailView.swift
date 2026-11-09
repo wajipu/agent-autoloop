@@ -36,7 +36,7 @@ struct SafariView: UIViewRepresentable {
 }
 
 struct IssueDetailView: View {
-    let item: Workitem
+    @State var item: Workitem
     @StateObject private var settings = AppSettings.shared
     @State private var detail: WorkitemDetail?
     @State private var error: String?
@@ -48,6 +48,17 @@ struct IssueDetailView: View {
     @State private var activities: [YunxiaoClient.Activity] = []
     @State private var commentDraft = ""
     @State private var postingComment = false
+
+    /// 从轮次详情跳进来时只有编号，先拉完整数据再展示。
+    private var resolved: Workitem? {
+        if let full = detail {
+            return Workitem(id: full.id, serialNumber: full.serialNumber, subject: full.subject,
+                            status: full.status, assignedTo: full.assignedTo,
+                            workitemType: full.workitemType, gmtModified: full.gmtModified,
+                            categoryId: full.categoryId)
+        }
+        return item
+    }
 
     var body: some View {
         List {
