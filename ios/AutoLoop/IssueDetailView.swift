@@ -279,9 +279,10 @@ struct IssueDetailView: View {
             }
             if children.count > 5 {
                 Button {
-                    withAnimation { showAllChildren = true }
+                    withAnimation { showAllChildren.toggle() }
                 } label: {
-                    Label("展开其余 \(children.count - 5) 个", systemImage: "chevron.down")
+                    Label(showAllChildren ? "收起" : "展开其余 \(children.count - 5) 个",
+                          systemImage: showAllChildren ? "chevron.up" : "chevron.down")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
