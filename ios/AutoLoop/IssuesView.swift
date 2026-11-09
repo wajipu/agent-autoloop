@@ -12,6 +12,7 @@ struct IssuesView: View {
     @State private var path = NavigationPath()
     @State private var creating = ProcessInfo.processInfo.environment["OPEN_CREATE"] == "1"
     @State private var shared: ShareInboxReader.Payload?
+    @State private var didRestoreCategory = false
 
     private var shown: [Workitem] {
         items.filter { item in
@@ -39,6 +40,7 @@ struct IssuesView: View {
                     .listRowBackground(Color.clear)
                     .onChange(of: category) {
                         statusFilter = nil
+                        settings.defaultCategory = category
                         Task { await load() }
                     }
                 }
@@ -123,7 +125,10 @@ struct IssuesView: View {
                     shared = inbox
                     creating = true
                 }
-                category = settings.defaultCategory
+                if !didRestoreCategory {
+                    didRestoreCategory = true
+                    category = settings.defaultCategory
+                }
                 await load()
                 // 演示/截图用：SIMCTL_CHILD_OPEN_SERIAL=MGMF-40 直接打开某一条
                 if let serial = ProcessInfo.processInfo.environment["OPEN_SERIAL"],
