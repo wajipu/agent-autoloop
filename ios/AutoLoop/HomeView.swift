@@ -7,6 +7,7 @@ struct HomeView: View {
     @State private var error: String?
     @State private var loading = false
     @State private var path = NavigationPath()
+    @ObservedObject private var deepLink = DeepLink.shared
 
     /// 已经退役的规则名：历史轮次还留在中台日志里，首页不再展示。
     private static let retiredRules: Set<String> = ["盯 Linear", "处理 Linear issue"]
@@ -64,6 +65,7 @@ struct HomeView: View {
                     ContentUnavailableView("连不上中台", systemImage: "wifi.exclamationmark", description: Text(error))
                 }
             }
+            .onChange(of: deepLink.cardID) { openPendingCard() }
             .task {
                 await load()
                 // 截图/调试用：OPEN_RUN=1351 直接打开某一轮
@@ -71,6 +73,7 @@ struct HomeView: View {
                    let run = state?.runs.first(where: { $0.id == id }) {
                     path.append(run)
                 }
+                openPendingCard()
                 await poll()
             }
         }
@@ -154,6 +157,13 @@ struct HomeView: View {
             await load()
             try? await Task.sleep(for: .seconds(15))
         }
+    }
+
+    private func openPendingCard() {
+        guard let id = deepLink.cardID,
+              let card = state?.cards.first(where: { $0.id == id }) else { return }
+        deepLink.cardID = nil
+        path.append(card)
     }
 
     private func load() async {

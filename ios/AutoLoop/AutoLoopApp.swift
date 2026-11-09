@@ -1,5 +1,11 @@
 import SwiftUI
 
+/// 从通知点进来时记一下要打开哪张卡片。
+final class DeepLink: ObservableObject {
+    static let shared = DeepLink()
+    @Published var cardID: Int?
+}
+
 @main
 struct AutoLoopApp: App {
     var body: some Scene {
@@ -28,5 +34,12 @@ struct RootView: View {
                 .tag("settings")
         }
         .preferredColorScheme(settings.appearance.colorScheme)
+        .onOpenURL { url in
+            guard url.scheme == "autoloop" else { return }
+            if url.host == "card", let id = Int(url.lastPathComponent) {
+                DeepLink.shared.cardID = id
+            }
+            tab = url.host == "issues" ? "issues" : "home"
+        }
     }
 }

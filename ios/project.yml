@@ -32,6 +32,10 @@ targets:
         UIUserInterfaceStyle: Automatic
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.wajipu.autoloop
+            CFBundleURLSchemes:
+              - autoloop
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop
