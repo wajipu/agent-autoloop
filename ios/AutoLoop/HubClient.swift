@@ -28,6 +28,7 @@ struct HubCard: Decodable, Identifiable, Hashable {
     let options: [String]?
     let rule: String?
     let createdAt: String?
+    let lane: String?
 }
 
 struct HubAgent: Decodable, Identifiable {
@@ -99,6 +100,8 @@ struct HubState: Decodable {
     let channels: [HubChannel]
     let runs: [HubRun]
     let spending: Spending?
+    let hasMore: Bool?
+    let nextBefore: Int?
 
     struct Spending: Decodable {
         let today: HubSpending?
@@ -122,8 +125,9 @@ struct HubClient {
     let baseURL: String
     let key: String
 
-    func state() async throws -> HubState {
-        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespaces) + "/v1/state") else {
+    func state(before: Int? = nil) async throws -> HubState {
+        let suffix = before.map { "?before=\($0)" } ?? ""
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespaces) + "/v1/state" + suffix) else {
             throw HubError.notConfigured
         }
         var request = URLRequest(url: url)

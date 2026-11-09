@@ -325,7 +325,14 @@ struct IssueDetailView: View {
         }
         let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
         do {
-            detail = try await client.detail(serialNumber: item.serialNumber)
+            let loaded = try await client.detail(serialNumber: item.serialNumber)
+            detail = loaded
+            if item.id.hasPrefix("serial-") {
+                item = Workitem(id: loaded.id, serialNumber: loaded.serialNumber, subject: loaded.subject,
+                                status: loaded.status, assignedTo: loaded.assignedTo,
+                                workitemType: loaded.workitemType, gmtModified: loaded.gmtModified,
+                                categoryId: loaded.categoryId)
+            }
         } catch {
             self.error = error.localizedDescription
         }

@@ -285,6 +285,9 @@ struct NowStat: View {
 
 struct CardRow: View {
     let card: HubCard
+    @StateObject private var settings = AppSettings.shared
+    @State private var trace: CardTrace?
+    @State private var relatedItem: Workitem?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -302,6 +305,12 @@ struct CardRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
+            if let serial = trace?.serial ?? card.lane, isWorkitemSerial(serial) {
+                Label([serial, relatedItem?.subject].compactMap { $0 }.joined(separator: " · "), systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
             if let options = card.options, !options.isEmpty {
                 Text(options.joined(separator: " / "))
                     .font(.caption2)
@@ -310,6 +319,16 @@ struct CardRow: View {
             }
         }
         .padding(.vertical, 2)
+        .task(id: card.id) {
+            guard settings.hubConfigured else { return }
+            let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+            trace = try? await CardTrace.lookup(card: card, page: { try await client.state(before: $0) },
+                                               facts: { try await client.why(runID: $0) })
+            if settings.configured, let serial = trace?.serial ?? card.lane, isWorkitemSerial(serial) {
+                let yunxiao = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+                relatedItem = try? await yunxiao.findWorkitem(serialNumber: serial)
+            }
+        }
     }
 }
 

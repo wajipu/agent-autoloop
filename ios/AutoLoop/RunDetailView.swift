@@ -331,6 +331,10 @@ struct CardDetailView: View {
     @StateObject private var settings = AppSettings.shared
     @State private var answering = false
     @State private var error: String?
+    @State private var trace: CardTrace?
+    @State private var traceLoading = true
+    @State private var traceError = false
+    @State private var relatedItem: Workitem?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -352,6 +356,36 @@ struct CardDetailView: View {
                 LabeledContent("来自规则", value: card.rule ?? "—")
                 if let created = HubRun.date(card.createdAt) {
                     LabeledContent("发出", value: StatusStyle.stamp(created))
+                }
+            }
+
+            Section("来源") {
+                if let serial = trace?.serial ?? card.lane, isWorkitemSerial(serial) {
+                    NavigationLink {
+                        IssueDetailView(item: relatedItem ?? Workitem.preview(serialNumber: serial, subject: ""))
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(serial, systemImage: "doc.text")
+                            if let subject = relatedItem?.subject, !subject.isEmpty {
+                                Text(subject).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                if let trace {
+                    NavigationLink {
+                        RunDetailView(run: trace.run)
+                    } label: {
+                        Label("查看第 \(trace.run.id) 轮", systemImage: "clock.arrow.circlepath")
+                    }
+                } else if traceLoading {
+                    ProgressView("查找来源…")
+                } else if traceError {
+                    Text("来源暂时读不到，请稍后重试")
+                        .foregroundStyle(.secondary)
+                } else if card.lane == nil || !isWorkitemSerial(card.lane ?? "") {
+                    Text("没有找到关联的工作项或轮次")
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -388,6 +422,21 @@ struct CardDetailView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("第 \(card.id) 张卡片")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            defer { traceLoading = false }
+            guard settings.hubConfigured else { traceError = true; return }
+            let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+            do {
+                trace = try await CardTrace.lookup(card: card, page: { try await client.state(before: $0) },
+                                                   facts: { try await client.why(runID: $0) })
+            } catch {
+                traceError = true
+            }
+            if settings.configured, let serial = trace?.serial ?? card.lane, isWorkitemSerial(serial) {
+                let yunxiao = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+                relatedItem = try? await yunxiao.findWorkitem(serialNumber: serial)
+            }
+        }
     }
 
     private func answer(_ index: Int) async {
