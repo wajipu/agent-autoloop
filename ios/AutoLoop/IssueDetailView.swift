@@ -44,6 +44,10 @@ struct IssueDetailView: View {
     @State private var statuses: [(id: String, name: String)] = []
     @State private var changingTo: String?
     @State private var flowError: String?
+    @State private var comments: [YunxiaoClient.Comment] = []
+    @State private var activities: [YunxiaoClient.Activity] = []
+    @State private var commentDraft = ""
+    @State private var postingComment = false
 
     var body: some View {
         List {
@@ -130,6 +134,52 @@ struct IssueDetailView: View {
                 }
             }
 
+            Section("评论（\(comments.count)）") {
+                if comments.isEmpty && detail != nil {
+                    Text("还没有评论").foregroundStyle(.secondary)
+                }
+                ForEach(comments) { comment in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(comment.user).font(.caption.weight(.medium))
+                            if let at = comment.at {
+                                Text(StatusStyle.relative(at)).font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                        Text(comment.content)
+                            .font(.subheadline)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.vertical, 2)
+                }
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextField("写评论…", text: $commentDraft, axis: .vertical)
+                        .lineLimit(1...4)
+                        .font(.subheadline)
+                    Button {
+                        Task { await postComment() }
+                    } label: {
+                        if postingComment { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "paperplane.fill") }
+                    }
+                    .disabled(commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || postingComment)
+                }
+                .padding(.top, 2)
+            }
+
+            if !activities.isEmpty {
+                Section("动态") {
+                    ForEach(activities) { activity in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(activity.text).font(.caption)
+                            if let at = activity.at {
+                                Text(StatusStyle.stamp(at)).font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+            }
+
             if let url = settings.workitemURL(item.id) {
                 Section {
                     Button {
@@ -146,7 +196,21 @@ struct IssueDetailView: View {
         .sheet(item: $web) { web in
             SafariSheet(url: web.url)
         }
-        .task { await load() }
+        .task {
+            await load()
+            await loadTalk()
+        }
+    }
+
+    private func loadTalk() async {
+        guard settings.configured else { return }
+        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        do {
+            comments = try await client.comments(issueID: item.identifier)
+            activities = try await client.activities(issueID: item.identifier)
+        } catch {
+            // 评论拉不到不拦着详情
+        }
     }
 
     private func loadStatuses() async {
@@ -167,6 +231,21 @@ struct IssueDetailView: View {
         do {
             try await client.updateStatus(issueID: item.identifier, statusID: id)
             flowError = nil
+        } catch {
+            flowError = error.localizedDescription
+        }
+    }
+
+    private func postComment() async {
+        let content = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty, settings.configured else { return }
+        postingComment = true
+        defer { postingComment = false }
+        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        do {
+            try await client.addComment(issueID: item.identifier, content: content)
+            commentDraft = ""
+            comments = try await client.comments(issueID: item.identifier)
         } catch {
             flowError = error.localizedDescription
         }

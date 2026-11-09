@@ -170,6 +170,88 @@ struct YunxiaoClient {
         }
     }
 
+    /// 富文本转纯文本（和详情页的 RichText 一个口径）。
+    private func htmlToPlain(_ html: String) -> String {
+        var result = html
+        if result.trimmingCharacters(in: .whitespaces).hasPrefix("{"),
+           let data = result.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let inner = parsed["htmlValue"] as? String {
+            result = inner
+        }
+        guard result.contains("<") else { return result.trimmingCharacters(in: .whitespacesAndNewlines) }
+        result = result.replacingOccurrences(of: "<br\\s*/?>", with: "\n", options: .regularExpression)
+        result = result.replacingOccurrences(of: "</(p|div|li|h[1-6]|tr|article)>", with: "\n", options: .regularExpression)
+        result = result.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        for (key, value) in ["&nbsp;": " ", "&lt;": "<", "&gt;": ">", "&quot;": "\"",
+                             "&#39;": "'", "&amp;": "&"] {
+            result = result.replacingOccurrences(of: key, with: value)
+        }
+        result = result.replacingOccurrences(of: "[ \t]+\n", with: "\n", options: .regularExpression)
+        result = result.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: 评论与动态
+
+    struct Comment: Identifiable, Hashable {
+        let id: String
+        let content: String
+        let user: String
+        let at: Date?
+    }
+
+    struct Activity: Identifiable, Hashable {
+        let id: String
+        let at: Date?
+        let text: String
+    }
+
+    func comments(issueID: String) async throws -> [Comment] {
+        let data = try await request(
+            path: "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)/comments",
+            method: "GET", body: nil)
+        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return list.compactMap { item -> Comment? in
+            guard let id = item["id"] as? String else { return nil }
+            let user = (item["user"] as? [String: Any])?["name"] as? String ?? ""
+            let created = (item["gmtCreate"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+            return Comment(id: id, content: htmlToPlain(item["content"] as? String ?? ""),
+                           user: user, at: created)
+        }
+    }
+
+    func addComment(issueID: String, content: String) async throws {
+        try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)/comments",
+                          method: "POST",
+                          body: ["content": content])
+    }
+
+    func activities(issueID: String) async throws -> [Activity] {
+        let data = try await request(
+            path: "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)/activities",
+            method: "GET", body: nil)
+        guard let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return list.compactMap { item -> Activity? in
+            guard let type = item["eventType"] as? String else { return nil }
+            let who = (item["operator"] as? [String: Any])?["name"] as? String ?? ""
+            let property = (item["property"] as? [String: Any])?["propertyName"] as? String ?? ""
+            let oldValue = ((item["oldValue"] as? [[String: Any]]) ?? []).first?["displayValue"] as? String ?? ""
+            let newValue = ((item["newValue"] as? [[String: Any]]) ?? []).first?["displayValue"] as? String ?? ""
+            let text: String
+            switch type {
+            case "workitem.transitioned" where property == "状态":
+                text = "\(who) 把状态从「\(oldValue)」改成「\(newValue)」"
+            case "workitem.commented":
+                text = "\(who) 评论了"
+            default:
+                text = "\(who) · \(type)"
+            }
+            let ms = item["eventTime"] as? Double
+            return Activity(id: "\(item["eventId"] ?? UUID().uuidString)", at: ms.map { Date(timeIntervalSince1970: $0 / 1000) }, text: text)
+        }
+    }
+
     /// 换状态。目标状态要在工作流允许的流转里。
     func updateStatus(issueID: String, statusID: String) async throws {
         try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)",
