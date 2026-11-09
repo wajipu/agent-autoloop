@@ -13,6 +13,12 @@ struct Workitem: Identifiable, Decodable, Hashable {
     let assignedTo: Named?
     let workitemType: Named?
     let gmtModified: Double?
+    let categoryId: String?
+
+    var category: IssueCategory {
+        IssueCategory(rawValue: categoryId ?? "") ?? .bug
+    }
+    var identifier: String { id }
 
     var statusName: String { status?.name ?? "—" }
     var assigneeName: String? { assignedTo?.name }

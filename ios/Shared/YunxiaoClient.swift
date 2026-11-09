@@ -156,6 +156,27 @@ struct YunxiaoClient {
         throw YunxiaoError.decoding("上传成功但没拿到嵌入地址")
     }
 
+    /// 这个类型的工作流状态列表（id + 名字），换状态用。
+    func workflowStatuses(category: IssueCategory) async throws -> [(id: String, name: String)] {
+        let typeID = try await workitemTypeID(category: category)
+        let path = "/oapi/v1/projex/organizations/\(orgId)/projects/\(projectId)/workitemTypes/\(typeID)/workflows"
+        let data = try await request(path: path, method: "GET", body: nil)
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let statuses = object["statuses"] as? [[String: Any]]
+        else { return [] }
+        return statuses.compactMap { status in
+            guard let id = status["id"] as? String else { return nil }
+            return (id, status["name"] as? String ?? id)
+        }
+    }
+
+    /// 换状态。目标状态要在工作流允许的流转里。
+    func updateStatus(issueID: String, statusID: String) async throws {
+        try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)",
+                          method: "PUT",
+                          body: ["status": statusID])
+    }
+
     /// 建一条工作项，返回新工单 id。
     func createIssue(category: IssueCategory,
                      subject: String,
