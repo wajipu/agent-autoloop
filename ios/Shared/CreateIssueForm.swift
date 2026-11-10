@@ -29,6 +29,24 @@ struct CreateIssueForm: View {
     var showCameraButton = true
     @FocusState private var typing: Bool
 
+    /// 外部入口（快捷指令、链接、图标快捷操作、小组件）可以带标题和预选大类。
+    init(initialTitle: String = "",
+         initialText: String = "",
+         initialImages: [URL] = [],
+         initialCategory: IssueCategory? = nil,
+         showAttachmentPickers: Bool = true,
+         onCreated: @escaping (String) -> Void,
+         onCancel: (() -> Void)? = nil) {
+        _subject = State(initialValue: initialTitle)
+        _detail = State(initialValue: initialText)
+        _category = State(initialValue: initialCategory ?? .bug)
+        self.initialText = initialText
+        self.initialImages = initialImages
+        self.showAttachmentPickers = showAttachmentPickers
+        self.onCreated = onCreated
+        self.onCancel = onCancel
+    }
+
     private var selectedType: WorkItemType? {
         types.first(where: { $0.id == selectedTypeID })
     }

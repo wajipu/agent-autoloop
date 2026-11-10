@@ -39,6 +39,26 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop.share
         TARGETED_DEVICE_FAMILY: "1"
 
+  AutoLoopWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widget
+        excludes:
+          - Info.plist
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: AutoLoop
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop.widget
+        TARGETED_DEVICE_FAMILY: "1"
+
   AutoLoop:
     type: application
     platform: iOS
@@ -48,6 +68,8 @@ targets:
     dependencies:
       - package: MarkdownUI
       - target: AutoLoopShare
+        embed: true
+      - target: AutoLoopWidget
         embed: true
     entitlements:
       path: AutoLoop/AutoLoop.entitlements
@@ -68,6 +90,10 @@ targets:
           - CFBundleURLName: com.wajipu.autoloop
             CFBundleURLSchemes:
               - autoloop
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.wajipu.autoloop.create
+            UIApplicationShortcutItemTitle: 新建工作项
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeCompose
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop

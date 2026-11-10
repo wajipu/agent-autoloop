@@ -333,6 +333,17 @@ struct YunxiaoClient {
         return id
     }
 
+    /// 建好后取回编号（MGMF-xx），给快捷指令回话用。
+    func serialNumber(issueID: String) async throws -> String {
+        let data = try await request(path: "/oapi/v1/projex/organizations/\(orgId)/workitems/\(issueID)",
+                                     method: "GET", body: nil)
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let serial = object?["serialNumber"] as? String else {
+            throw YunxiaoError.decoding("建好了但没拿到编号")
+        }
+        return serial
+    }
+
     private func request(path: String, method: String, body: [String: Any]?) async throws -> Data {
         guard let url = URL(string: base.absoluteString + path) else { throw YunxiaoError.notConfigured }
         var request = URLRequest(url: url)
