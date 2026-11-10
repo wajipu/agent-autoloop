@@ -7,16 +7,18 @@ import Foundation
 struct AgentTrigger {
     let targetName: String
     let idleName: String?
+    /// Agent 做完后自己会转到的状态。
+    let doneName: String
 
     static func of(_ category: IssueCategory) -> AgentTrigger? {
         switch category {
         case .bug:
             // 缺陷新建就在「待确认」，重新触发时先经过「处理中」。
-            AgentTrigger(targetName: "待确认", idleName: "处理中")
+            AgentTrigger(targetName: "待确认", idleName: "处理中", doneName: "已修复")
         case .task, .risk:
-            AgentTrigger(targetName: "处理中", idleName: "待处理")
+            AgentTrigger(targetName: "处理中", idleName: "待处理", doneName: "已完成")
         case .req:
-            AgentTrigger(targetName: "开发中", idleName: "待处理")
+            AgentTrigger(targetName: "开发中", idleName: "待处理", doneName: "测试中")
         case .topic:
             // 主题没有工作项类型，也没有工作流。
             nil

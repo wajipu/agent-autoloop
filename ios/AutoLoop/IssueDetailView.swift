@@ -142,7 +142,7 @@ struct IssueDetailView: View {
                     }
                     .disabled(handingOff)
                 } footer: {
-                    Text("转到「\(trigger.targetName)」后，5 分钟内的下一轮轮询会开始处理。")
+                    Text("转到「\(trigger.targetName)」后，5 分钟内的下一轮轮询会开始处理；做完会转到「\(trigger.doneName)」。")
                 }
             }
 
@@ -248,6 +248,11 @@ struct IssueDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .refreshable {
+            await load()
+            await loadTalk()
+            await loadChildren()
+        }
         .navigationTitle(item.serialNumber)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $web) { web in
