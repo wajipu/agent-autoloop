@@ -94,6 +94,7 @@ final class AppSettings: ObservableObject {
 
 extension Notification.Name {
     static let issueCategoryChanged = Notification.Name("issueCategoryChanged")
+    static let issuesShouldReload = Notification.Name("issuesShouldReload")
 }
 
 enum Appearance: String, CaseIterable, Identifiable {

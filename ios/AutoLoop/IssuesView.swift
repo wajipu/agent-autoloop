@@ -81,6 +81,9 @@ struct IssuesView: View {
             }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜标题或编号")
             .refreshable { await load() }
+            .onReceive(NotificationCenter.default.publisher(for: .issuesShouldReload)) { _ in
+                Task { await load() }
+            }
             .scrollDismissesKeyboard(.interactively)
             .sheet(isPresented: $creating) {
                 NavigationStack {

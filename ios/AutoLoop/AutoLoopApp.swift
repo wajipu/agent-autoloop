@@ -20,6 +20,7 @@ struct AutoLoopApp: App {
 struct RootView: View {
     @StateObject private var settings = AppSettings.shared
     @State private var tab = ProcessInfo.processInfo.environment["OPEN_TAB"] ?? "home"
+    @State private var creating = false
 
     var body: some View {
         TabView(selection: $tab) {
@@ -29,9 +30,30 @@ struct RootView: View {
             IssuesView()
                 .tabItem { Label("工作项", systemImage: "square.stack.3d.up") }
                 .tag("issues")
+            Color.clear
+                .tabItem { Label("新建", systemImage: "plus.circle.fill") }
+                .tag("create")
             SettingsView()
                 .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
                 .tag("settings")
+        }
+        .onChange(of: tab) { oldValue, newValue in
+            // 「新建」是动作不是页面：弹出表单后立刻回到原来的页签。
+            if newValue == "create" {
+                creating = true
+                tab = oldValue
+            }
+        }
+        .sheet(isPresented: $creating) {
+            NavigationStack {
+                CreateIssueForm(onCreated: { _ in
+                    creating = false
+                    tab = "issues"
+                    NotificationCenter.default.post(name: .issuesShouldReload, object: nil)
+                }, onCancel: {
+                    creating = false
+                })
+            }
         }
         .preferredColorScheme(settings.appearance.colorScheme)
         .onOpenURL { url in
