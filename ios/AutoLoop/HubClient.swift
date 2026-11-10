@@ -52,6 +52,7 @@ struct HubRuleLine: Decodable {
     let source: String?
     let types: [String]?
     let every: String?
+    let next: String?
     let paused: Pause?
 
     struct Pause: Decodable {

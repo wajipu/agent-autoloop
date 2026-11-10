@@ -125,7 +125,11 @@ struct HomeView: View {
             .filter { ["claimed", "queued", "unknown"].contains($0.state) }
             .sorted { ($0.state == "claimed" ? 0 : 1, -$0.id) < ($1.state == "claimed" ? 0 : 1, -$1.id) }
             .prefix(4)
-        Section("现在") {
+        let nextBatch = (state.lines ?? [])
+            .filter { $0.paused == nil }
+            .compactMap { line in HubRun.date(line.next).map { (line.name, $0) } }
+            .min { $0.1 < $1.1 }
+        Section {
             HStack(spacing: 0) {
                 NowStat(value: t.running, label: "在跑", color: .blue)
                 Divider().frame(height: 28)
@@ -160,7 +164,35 @@ struct HomeView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
+        } header: {
+            HStack {
+                Text("现在")
+                Spacer()
+                if let nextBatch {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("下一批 \(countdown(to: nextBatch.1, now: context.date))")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.tertiary)
+                    }
+                } else if ruleCount > 0 && pausedRuleCount == ruleCount {
+                    Text("已全部暂停")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
         }
+    }
+
+    /// 距离下一批还有多久；到了就显示“即将执行”，等下一次轮询刷新。
+    private func countdown(to date: Date, now: Date) -> String {
+        let seconds = max(0, Int(date.timeIntervalSince(now).rounded()))
+        if seconds == 0 { return "即将执行" }
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let rest = seconds % 60
+        if hours > 0 { return String(format: "%d:%02d:%02d", hours, minutes, rest) }
+        return String(format: "%02d:%02d", minutes, rest)
     }
 
     // MARK: - 规则

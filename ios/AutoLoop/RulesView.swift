@@ -112,7 +112,8 @@ struct RulesView: View {
     }
 
     private func row(_ item: RuleItem) -> some View {
-        let pause = lines.first { $0.name == item.name }?.paused
+        let line = lines.first { $0.name == item.name }
+        let pause = line?.paused
         return HStack {
             Button {
                 editing = item
@@ -142,6 +143,11 @@ struct RulesView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if item.enabled, pause == nil, let next = HubRun.date(line?.next) {
+                        Text("下次执行：\(StatusStyle.stamp(next))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.vertical, 2)
                 .contentShape(Rectangle())
