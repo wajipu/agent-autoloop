@@ -139,7 +139,36 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
-            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: active.isEmpty ? 8 : 2, trailing: 16))
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
+            if let nextBatch {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Text("下一批执行")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text(countdown(to: nextBatch.1, now: context.date))
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.tint)
+                    }
+                }
+                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 10, trailing: 16))
+            } else if ruleCount > 0 && pausedRuleCount == ruleCount {
+                HStack(spacing: 8) {
+                    Image(systemName: "pause.circle")
+                        .font(.footnote)
+                    Text("全部规则已暂停，不派发新任务")
+                        .font(.subheadline)
+                    Spacer()
+                }
+                .foregroundStyle(.orange)
+                .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 10, trailing: 16))
+            }
 
             ForEach(Array(active)) { run in
                 NavigationLink(value: run) {
@@ -165,22 +194,7 @@ struct HomeView: View {
                     .foregroundStyle(.tertiary)
             }
         } header: {
-            HStack {
-                Text("现在")
-                Spacer()
-                if let nextBatch {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text("下一批 \(countdown(to: nextBatch.1, now: context.date))")
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                    }
-                } else if ruleCount > 0 && pausedRuleCount == ruleCount {
-                    Text("已全部暂停")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-            }
+            Text("现在")
         }
     }
 
