@@ -515,7 +515,7 @@ function answer(draft: Draft, id: number, given: Row) {
 function nextCard(draft: Draft, channel: string) {
   const { now } = draft;
   for (const card of draft.view.deliveryCandidates(channel, now)) {
-    const reach = card.rule ? ruleNamed(draft, card.rule)?.channels : undefined;
+    const reach = (card.rule ? ruleNamed(draft, card.rule)?.channels : undefined) ?? draft.rules.defaultChannels;
     if (reach && !reach.includes(channel)) continue;
     const key = `${card.id}:${channel}`;
     const delivery = draft.view.get("deliveries", key) ?? NOT_DELIVERED;

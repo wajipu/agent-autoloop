@@ -17,6 +17,7 @@ const when = (rule: Rule, rules: Rules, now: number) =>
 function details(rule: Rule, rules: Rules, now: number) {
   const parts = [when(rule, rules, now), `→ ${rule.to}`, rule.cwd];
   if (rule.parallel) parts.push(`并发 ${rule.parallel}`);
+  if (rule.channels?.length) parts.push(`只发 ${rule.channels.join("、")}`);
   if (rule.resume) parts.push("接着上一轮的会话");
   if (rule.group !== rule.name) parts.push(`组 ${rule.group}`);
   if (rule.tell !== "needed") parts.push(`通知 ${rule.tell}`);
@@ -47,6 +48,7 @@ export function explainRules(text: string, now = Date.now(), zone = localZone())
         })
         .join("、")}`,
     );
+  if (rules.defaultChannels) lines.push(`没写 channels 的卡片和通知默认只发 ${rules.defaultChannels.join("、")}`);
   lines.push("规则：");
   for (const rule of rules.rules) lines.push(`  ${rule.name}：${details(rule, rules, now)}`);
   for (const task of rules.elsewhere) {
