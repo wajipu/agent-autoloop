@@ -119,7 +119,7 @@ struct IssueDetailView: View {
                 }
             }
 
-            if let trigger = AgentTrigger.of(item.category) {
+            if let trigger = AgentTrigger.of(item.category), detail != nil {
                 Section {
                     Button {
                         Task { await handOff(trigger) }
