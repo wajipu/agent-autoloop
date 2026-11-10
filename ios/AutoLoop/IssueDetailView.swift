@@ -44,6 +44,8 @@ struct IssueDetailView: View {
     @State private var statuses: [(id: String, name: String)] = []
     @State private var changingTo: String?
     @State private var flowError: String?
+    @State private var handingOff = false
+    @State private var handedOff = false
     @State private var comments: [YunxiaoClient.Comment] = []
     @State private var activities: [YunxiaoClient.Activity] = []
     @State private var children: [Workitem] = []
@@ -114,6 +116,41 @@ struct IssueDetailView: View {
                         .font(.footnote)
                 } else {
                     HStack { Spacer(); ProgressView(); Spacer() }
+                }
+            }
+
+            if let trigger = AgentTrigger.of(item.category) {
+                Section {
+                    Button {
+                        Task { await handOff(trigger) }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Label("交给 Agent", systemImage: "sparkles")
+                            Spacer()
+                            if handingOff {
+                                ProgressView().controlSize(.small)
+                            } else if handedOff {
+                                Text("已交给 Agent")
+                                    .font(.footnote)
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text(trigger.targetName)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .disabled(handingOff)
+                } footer: {
+                    Text("转到「\(trigger.targetName)」后，5 分钟内的下一轮轮询会开始处理。")
+                }
+            }
+
+            if let flowError, statuses.isEmpty {
+                Section {
+                    Label(flowError, systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -264,6 +301,41 @@ struct IssueDetailView: View {
         do {
             try await client.updateStatus(issueID: item.identifier, statusID: id)
             flowError = nil
+            handedOff = false
+            await load()
+            NotificationCenter.default.post(name: .issuesShouldReload, object: nil)
+        } catch {
+            flowError = error.localizedDescription
+        }
+    }
+
+    /// 一键交给 Agent：转到该大类的触发状态。
+    /// 已经在目标状态时先退回 idle 再转回来，轮询才会看到一次新的状态变化。
+    private func handOff(_ trigger: AgentTrigger) async {
+        guard settings.configured else { return }
+        handingOff = true
+        handedOff = false
+        defer { handingOff = false }
+        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        do {
+            if statuses.isEmpty {
+                statuses = try await client.workflowStatuses(category: item.category)
+            }
+            guard let target = statuses.first(where: { $0.name == trigger.targetName }) else {
+                flowError = "这个工作流里没有「\(trigger.targetName)」状态"
+                return
+            }
+            let currentID = detail?.status?.id ?? item.status?.id
+            if currentID == target.id,
+               let idleName = trigger.idleName,
+               let idle = statuses.first(where: { $0.name == idleName }) {
+                try await client.updateStatus(issueID: item.identifier, statusID: idle.id)
+            }
+            try await client.updateStatus(issueID: item.identifier, statusID: target.id)
+            flowError = nil
+            handedOff = true
+            await load()
+            NotificationCenter.default.post(name: .issuesShouldReload, object: nil)
         } catch {
             flowError = error.localizedDescription
         }
@@ -327,12 +399,10 @@ struct IssueDetailView: View {
         do {
             let loaded = try await client.detail(serialNumber: item.serialNumber)
             detail = loaded
-            if item.id.hasPrefix("serial-") {
-                item = Workitem(id: loaded.id, serialNumber: loaded.serialNumber, subject: loaded.subject,
-                                status: loaded.status, assignedTo: loaded.assignedTo,
-                                workitemType: loaded.workitemType, gmtModified: loaded.gmtModified,
-                                categoryId: loaded.categoryId)
-            }
+            item = Workitem(id: loaded.id, serialNumber: loaded.serialNumber, subject: loaded.subject,
+                            status: loaded.status, assignedTo: loaded.assignedTo,
+                            workitemType: loaded.workitemType, gmtModified: loaded.gmtModified,
+                            categoryId: loaded.categoryId ?? item.categoryId)
         } catch {
             self.error = error.localizedDescription
         }
