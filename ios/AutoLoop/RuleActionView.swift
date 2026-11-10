@@ -20,15 +20,11 @@ struct RuleActionView: View {
     @State private var saving = false
     @State private var error: String?
 
-    private var needsSubject: Bool {
-        operation.action == .run && operation.item.raw["parallel"] != nil
-    }
-
     var body: some View {
         Form {
             Section {
-                LabeledContent("规则", value: operation.item.name)
-                LabeledContent("派给", value: operation.item.to)
+                LabeledContent("规则", value: operation.name)
+                LabeledContent("派给", value: operation.agent)
             }
             if operation.action == .pause {
                 Section {
@@ -42,14 +38,14 @@ struct RuleActionView: View {
                 }
             } else if operation.action == .run {
                 Section {
-                    if needsSubject {
+                    if operation.needsSubject {
                         TextField("对象编号", text: $subject)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
                     TextField("运行说明（可选）", text: $reason, axis: .vertical)
                 } footer: {
-                    Text(needsSubject
+                    Text(operation.needsSubject
                          ? "填写要处理的对象编号，例如工作项编号。确认后进入正常队列，可能产生模型费用和实际业务操作。"
                          : "确认后进入正常队列，可能产生模型费用和实际业务操作。")
                 }
@@ -82,7 +78,7 @@ struct RuleActionView: View {
                 } label: {
                     if saving { ProgressView() } else { Text("确认") }
                 }
-                .disabled(saving || (needsSubject && subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(saving || (operation.needsSubject && subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                           || (operation.action == .pause && autoResume && until <= Date()))
             }
         }
@@ -94,7 +90,7 @@ struct RuleActionView: View {
         defer { saving = false }
         do {
             let result = try await HubClient(baseURL: settings.hubURL, key: settings.hubKey)
-                .controlRule(name: operation.item.name, action: operation.action,
+                .controlRule(name: operation.name, action: operation.action,
                              reason: reason.trimmingCharacters(in: .whitespacesAndNewlines),
                              subject: subject.trimmingCharacters(in: .whitespacesAndNewlines),
                              until: operation.action == .pause && autoResume ? until : nil)

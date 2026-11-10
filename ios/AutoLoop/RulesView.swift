@@ -152,14 +152,14 @@ struct RulesView: View {
                 Menu {
                     if pause == nil {
                         Button("暂停规则", systemImage: "pause.circle") {
-                            operation = RuleOperation(item: item, action: .pause)
+                            operation = RuleOperation(name: item.name, agent: item.to, action: .pause, needsSubject: false)
                         }
                         Button("立即运行", systemImage: "play.circle") {
-                            operation = RuleOperation(item: item, action: .run)
+                            operation = RuleOperation(name: item.name, agent: item.to, action: .run, needsSubject: item.raw["parallel"] != nil)
                         }
                     } else {
                         Button("恢复规则", systemImage: "play.circle") {
-                            operation = RuleOperation(item: item, action: .resume)
+                            operation = RuleOperation(name: item.name, agent: item.to, action: .resume, needsSubject: false)
                         }
                     }
                 } label: {

@@ -48,6 +48,10 @@ struct HubChannel: Decodable, Identifiable {
 
 struct HubRuleLine: Decodable {
     let name: String
+    let agent: String?
+    let source: String?
+    let types: [String]?
+    let every: String?
     let paused: Pause?
 
     struct Pause: Decodable {

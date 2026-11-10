@@ -7,6 +7,9 @@ struct HomeView: View {
     @State private var error: String?
     @State private var loading = false
     @State private var path = NavigationPath()
+    @State private var ruleBusy = false
+    @State private var ruleError: String?
+    @State private var confirmPauseAll = false
     @ObservedObject private var deepLink = DeepLink.shared
 
     /// 已经退役的规则名：历史轮次还留在中台日志里，首页不再展示。
@@ -45,7 +48,25 @@ struct HomeView: View {
             .navigationDestination(for: HubCard.self) { CardDetailView(card: $0) }
             .refreshable { await load() }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        confirmPauseAll = true
+                    } label: {
+                        Image(systemName: "pause.circle")
+                    }
+                    .tint(.orange)
+                    .disabled(ruleBusy || ruleCount == 0 || pausedRuleCount == ruleCount)
+                    .accessibilityLabel("暂停全部规则")
+
+                    Button {
+                        Task { await resumeAllRules() }
+                    } label: {
+                        Image(systemName: "play.circle")
+                    }
+                    .tint(.green)
+                    .disabled(ruleBusy || pausedRuleCount == 0)
+                    .accessibilityLabel("恢复全部规则")
+
                     NavigationLink {
                         StatisticsView(state: state, runs: runs)
                     } label: {
@@ -66,6 +87,22 @@ struct HomeView: View {
                 }
             }
             .onChange(of: deepLink.cardID) { openPendingCard() }
+            .confirmationDialog("暂停全部规则？", isPresented: $confirmPauseAll, titleVisibility: .visible) {
+                Button("暂停全部", role: .destructive) {
+                    Task { await pauseAllRules() }
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("暂停后不再派发新任务，已排队的任务会保留；恢复后不会补跑暂停期间错过的触发。")
+            }
+            .alert("规则操作失败", isPresented: Binding(
+                get: { ruleError != nil },
+                set: { if !$0 { ruleError = nil } }
+            )) {
+                Button("好", role: .cancel) {}
+            } message: {
+                Text(ruleError ?? "")
+            }
             .task {
                 await load()
                 // 截图/调试用：OPEN_RUN=1351 直接打开某一轮
@@ -124,6 +161,45 @@ struct HomeView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+    }
+
+    // MARK: - 规则
+
+    private var ruleCount: Int { state?.lines?.count ?? 0 }
+    private var pausedRuleCount: Int { state?.lines?.filter { $0.paused != nil }.count ?? 0 }
+
+    private func pauseAllRules() async {
+        guard let lines = state?.lines else { return }
+        let targets = lines.filter { $0.paused == nil }
+        guard !targets.isEmpty else { return }
+        ruleBusy = true
+        defer { ruleBusy = false }
+        let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+        do {
+            for line in targets {
+                _ = try await client.controlRule(name: line.name, action: .pause)
+            }
+        } catch {
+            ruleError = error.localizedDescription
+        }
+        await load()
+    }
+
+    private func resumeAllRules() async {
+        guard let lines = state?.lines else { return }
+        let targets = lines.filter { $0.paused != nil }
+        guard !targets.isEmpty else { return }
+        ruleBusy = true
+        defer { ruleBusy = false }
+        let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+        do {
+            for line in targets {
+                _ = try await client.controlRule(name: line.name, action: .resume)
+            }
+        } catch {
+            ruleError = error.localizedDescription
+        }
+        await load()
     }
 
     // MARK: - 最新处理
