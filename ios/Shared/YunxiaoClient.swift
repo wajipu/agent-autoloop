@@ -248,7 +248,11 @@ struct YunxiaoClient {
     struct Activity: Identifiable, Hashable {
         let id: String
         let at: Date?
+        let user: String
+        /// 不含人名的动作描述，例如“把状态从「开发中」改成「测试中」”。
         let text: String
+        /// 评论事件在时间线里由评论本身呈现，避免重复。
+        let isComment: Bool
     }
 
     func comments(issueID: String) async throws -> [Comment] {
@@ -285,16 +289,24 @@ struct YunxiaoClient {
             let text: String
             switch type {
             case "workitem.transitioned" where property == "状态":
-                text = "\(who) 把状态从「\(oldValue)」改成「\(newValue)」"
-            case "workitem.commented":
-                text = "\(who) 评论了"
+                text = "把状态从「\(oldValue)」改成「\(newValue)」"
+            case "workitem.transitioned":
+                text = "把「\(property)」从「\(oldValue)」改成「\(newValue)」"
+            case "workitem.created":
+                text = "创建了这条工作项"
             case "workitem.association.changed":
-                text = "\(who) 调整了子单关联"
+                text = property.isEmpty ? "调整了子单关联" : "调整了「\(property)」"
+            case "workitem.updated":
+                text = property.isEmpty ? "更新了工作项" : "更新了「\(property)」"
+            case "workitem.commented":
+                text = "评论了"
             default:
-                text = "\(who) · \(type)"
+                text = property.isEmpty ? "更新了工作项" : "更新了「\(property)」"
             }
             let ms = item["eventTime"] as? Double
-            return Activity(id: "\(item["eventId"] ?? UUID().uuidString)", at: ms.map { Date(timeIntervalSince1970: $0 / 1000) }, text: text)
+            return Activity(id: "\(item["eventId"] ?? UUID().uuidString)",
+                            at: ms.map { Date(timeIntervalSince1970: $0 / 1000) },
+                            user: who, text: text, isComment: type == "workitem.commented")
         }
     }
 

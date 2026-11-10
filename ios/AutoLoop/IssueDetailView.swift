@@ -64,6 +64,83 @@ struct IssueDetailView: View {
         return item
     }
 
+    /// 评论和状态变更合成一条按时间排的时间线。
+    private struct TimelineEntry: Identifiable {
+        enum Kind {
+            case comment(String)
+            case event(String)
+        }
+
+        let id: String
+        let at: Date?
+        let user: String
+        let kind: Kind
+    }
+
+    private var timeline: [TimelineEntry] {
+        var entries = comments.map {
+            TimelineEntry(id: "c-\($0.id)", at: $0.at, user: $0.user, kind: .comment($0.content))
+        }
+        for activity in activities where !activity.isComment {
+            entries.append(TimelineEntry(id: "a-\(activity.id)", at: activity.at,
+                                         user: activity.user, kind: .event(activity.text)))
+        }
+        return entries.sorted { ($0.at ?? .distantPast) < ($1.at ?? .distantPast) }
+    }
+
+    @ViewBuilder
+    private func timelineRow(_ entry: TimelineEntry) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            timelineAvatar(entry)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(entry.user.isEmpty ? "未知" : entry.user)
+                        .font(.caption.weight(.semibold))
+                    if let at = entry.at {
+                        Text(StatusStyle.stamp(at))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Spacer(minLength: 6)
+                        Text(StatusStyle.relative(at))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                }
+                switch entry.kind {
+                case .comment(let content):
+                    Text(content)
+                        .font(.subheadline)
+                        .textSelection(.enabled)
+                case .event(let text):
+                    Text(text)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func timelineAvatar(_ entry: TimelineEntry) -> some View {
+        switch entry.kind {
+        case .comment:
+            Text(String((entry.user.isEmpty ? "?" : entry.user).prefix(1)))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.accentColor.gradient))
+        case .event:
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Color(uiColor: .tertiarySystemFill)))
+        }
+    }
+
     var body: some View {
         List {
             Section {
@@ -187,23 +264,12 @@ struct IssueDetailView: View {
                 }
             }
 
-            Section("评论（\(comments.count)）") {
-                if comments.isEmpty && detail != nil {
-                    Text("还没有评论").foregroundStyle(.secondary)
+            Section {
+                if timeline.isEmpty && detail != nil {
+                    Text("还没有评论和动态").foregroundStyle(.secondary)
                 }
-                ForEach(comments) { comment in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(comment.user).font(.caption.weight(.medium))
-                            if let at = comment.at {
-                                Text(StatusStyle.relative(at)).font(.caption2).foregroundStyle(.tertiary)
-                            }
-                        }
-                        Text(comment.content)
-                            .font(.subheadline)
-                            .textSelection(.enabled)
-                    }
-                    .padding(.vertical, 2)
+                ForEach(timeline) { entry in
+                    timelineRow(entry)
                 }
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("写评论…", text: $commentDraft, axis: .vertical)
@@ -218,23 +284,12 @@ struct IssueDetailView: View {
                     .disabled(commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || postingComment)
                 }
                 .padding(.top, 2)
+            } header: {
+                Text("时间线（\(timeline.count)）")
             }
 
             if !children.isEmpty {
                 subItemsSection
-            }
-
-            if !activities.isEmpty {
-                Section("动态") {
-                    ForEach(activities) { activity in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(activity.text).font(.caption)
-                            if let at = activity.at {
-                                Text(StatusStyle.stamp(at)).font(.caption2).foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                }
             }
 
             if let url = settings.workitemURL(item.id) {
