@@ -46,6 +46,33 @@ struct HubChannel: Decodable, Identifiable {
     let online: Bool
 }
 
+struct HubRuleLine: Decodable {
+    let name: String
+    let paused: Pause?
+
+    struct Pause: Decodable {
+        let reason: String?
+        let since: String?
+        let until: String?
+    }
+}
+
+enum RuleAction: String {
+    case pause, resume, run
+
+    var title: String {
+        switch self {
+        case .pause: "暂停规则"
+        case .resume: "恢复规则"
+        case .run: "立即运行"
+        }
+    }
+}
+
+struct RuleControlResult: Decodable {
+    let run: Int?
+}
+
 struct HubRun: Decodable, Identifiable, Hashable {
     let id: Int
     let rule: String
@@ -102,6 +129,7 @@ struct HubState: Decodable {
     let spending: Spending?
     let hasMore: Bool?
     let nextBefore: Int?
+    let lines: [HubRuleLine]?
 
     struct Spending: Decodable {
         let today: HubSpending?
@@ -124,6 +152,37 @@ enum HubError: LocalizedError {
 struct HubClient {
     let baseURL: String
     let key: String
+
+    func controlRule(name: String, action: RuleAction, reason: String = "",
+                     subject: String = "", until: Date? = nil) async throws -> RuleControlResult {
+        let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/%?#"))
+        guard let encoded = name.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                            + "/v1/rules/\(encoded)/\(action.rawValue)") else {
+            throw HubError.notConfigured
+        }
+        var body: [String: Any] = [:]
+        if action != .resume {
+            if !reason.isEmpty { body["reason"] = reason }
+            if action == .run, !subject.isEmpty { body["subject"] = subject }
+            if action == .pause, let until {
+                body["until"] = ISO8601DateFormatter().string(from: until)
+            }
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            throw HubError.http(code, object?["error"] as? String ?? "规则操作失败")
+        }
+        return try JSONDecoder().decode(RuleControlResult.self, from: data)
+    }
 
     func state(before: Int? = nil) async throws -> HubState {
         let suffix = before.map { "?before=\($0)" } ?? ""

@@ -10,12 +10,22 @@ struct RulesView: View {
     @State private var creating = ProcessInfo.processInfo.environment["OPEN_RULES_NEW"] == "1"
     @State private var saving = false
     @State private var sources: [String: Any] = [:]
+    @State private var lines: [HubRuleLine] = []
+    @State private var controlsAvailable = false
+    @State private var operation: RuleOperation?
+    @State private var notice: String?
 
     private var enabled: [RuleItem] { items.filter(\.enabled) }
     private var disabled: [RuleItem] { items.filter { !$0.enabled } }
 
     var body: some View {
         List {
+            if let notice {
+                Section {
+                    Label(notice, systemImage: "checkmark.circle")
+                        .font(.footnote).foregroundStyle(.green)
+                }
+            }
             if let error {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -30,6 +40,7 @@ struct RulesView: View {
                         .swipeActions(edge: .trailing) {
                             Button("停用") { Task { await toggle(item) } }
                                 .tint(.orange)
+                                .disabled(saving || loading)
                         }
                 }
                 if enabled.isEmpty && !loading {
@@ -38,7 +49,7 @@ struct RulesView: View {
             } header: {
                 Text("启用中")
             } footer: {
-                Text("点一条改定时和提示词，左滑停用；改完自动保存，校验不过会退回原样。")
+                Text("点规则编辑；右侧菜单可暂停、恢复或立即运行。左滑停用会移出启用配置，暂停则保留配置和排队任务。")
             }
 
             if !disabled.isEmpty {
@@ -48,6 +59,7 @@ struct RulesView: View {
                             .swipeActions(edge: .trailing) {
                                 Button("启用") { Task { await toggle(item) } }
                                     .tint(.green)
+                                    .disabled(saving || loading)
                             }
                     }
                 }
@@ -56,6 +68,7 @@ struct RulesView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("规则")
         .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await load() }
         .overlay {
             if loading { ProgressView("读取规则…") }
         }
@@ -66,6 +79,7 @@ struct RulesView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .disabled(loading || saving)
             }
         }
         .task { await load() }
@@ -87,34 +101,80 @@ struct RulesView: View {
                 }
             }
         }
+        .sheet(item: $operation) { operation in
+            NavigationStack {
+                RuleActionView(operation: operation) { message in
+                    await load()
+                    notice = message
+                }
+            }
+        }
     }
 
     private func row(_ item: RuleItem) -> some View {
-        Button {
-            editing = item
-        } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(item.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(item.enabled ? .primary : .secondary)
-                    Spacer()
-                    Text(item.to)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+        let pause = lines.first { $0.name == item.name }?.paused
+        return HStack {
+            Button {
+                editing = item
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(item.name)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(item.enabled ? .primary : .secondary)
+                        Spacer()
+                        Text(item.to)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let pause, item.enabled {
+                        Label("已暂停", systemImage: "pause.circle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                        if let reason = pause.reason, !reason.isEmpty {
+                            Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        if let until = HubRun.date(pause.until) {
+                            Text("自动恢复：\(until.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(item.trigger)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                Text(item.trigger)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                .padding(.vertical, 2)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 2)
+            .buttonStyle(.plain)
+            .disabled(saving || loading)
+            if item.enabled {
+                Menu {
+                    if pause == nil {
+                        Button("暂停规则", systemImage: "pause.circle") {
+                            operation = RuleOperation(item: item, action: .pause)
+                        }
+                        Button("立即运行", systemImage: "play.circle") {
+                            operation = RuleOperation(item: item, action: .run)
+                        }
+                    } else {
+                        Button("恢复规则", systemImage: "play.circle") {
+                            operation = RuleOperation(item: item, action: .resume)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("\(item.name)运行操作")
+                .disabled(saving || loading || !controlsAvailable)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private func load() async {
         loading = true
+        controlsAvailable = false
         defer { loading = false }
         guard settings.hubConfigured else {
             error = "还没配中台密钥"
@@ -125,6 +185,9 @@ struct RulesView: View {
             items = RuleItem.list(payload)
             agents = payload.agents
             sources = payload.sources
+            let state = try await HubClient(baseURL: settings.hubURL, key: settings.hubKey).state()
+            lines = state.lines ?? []
+            controlsAvailable = state.lines != nil
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -132,6 +195,7 @@ struct RulesView: View {
     }
 
     private func toggle(_ item: RuleItem) async {
+        guard !saving && !loading else { return }
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[index].enabled.toggle()
         await persist()
@@ -144,6 +208,7 @@ struct RulesView: View {
             _ = try await client().save(rules: items.filter(\.enabled).map(\.raw),
                                         disabled: items.filter { !$0.enabled }.map(\.raw))
             error = nil
+            await load()
         } catch {
             self.error = error.localizedDescription
             await load()
