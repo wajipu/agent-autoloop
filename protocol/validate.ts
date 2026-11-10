@@ -12,7 +12,32 @@ export const DELIVERY_REF = 500;
 export type Later = { key: string; at?: string; about?: string; cancel?: boolean };
 export type Ask = { title: string; text: string; options: string[]; recommend?: number; about?: string; key?: string };
 export type Notice = { title: string; text: string; key?: string; fyi?: boolean };
-export type Usage = { input?: number; output?: number; cached?: number; cost?: number };
+export type Usage = { input?: number; output?: number; cached?: number; cost?: number; estimatedCost?: number };
+export type ProgressStep = { id: string; title: string; status: "pending" | "running" | "completed" };
+
+const PROGRESS_ITEMS = 20;
+const PROGRESS_TEXT = 80;
+const PROGRESS_BYTES = 4096;
+
+/** A small display-only snapshot. Agent output never becomes a command or a prompt. */
+export function parseProgress(input: unknown): ProgressStep[] {
+  if (!Array.isArray(input) || input.length > PROGRESS_ITEMS)
+    throw new InputError(`progress 最多 ${PROGRESS_ITEMS} 项`);
+  const ids = new Set<string>();
+  const steps = input.map((value) => {
+    if (!isItem(value) || !only(value, ["id", "title", "status"])) throw new InputError("progress 每项字段不正确");
+    if (!text(value.id, 80) || !text(value.title, PROGRESS_TEXT))
+      throw new InputError("progress 的 id/title 不能为空且最多 80 字");
+    if (!["pending", "running", "completed"].includes(value.status as string))
+      throw new InputError("progress status 不正确");
+    const id = (value.id as string).trim();
+    if (ids.has(id)) throw new InputError("progress id 不能重复");
+    ids.add(id);
+    return { id, title: (value.title as string).trim(), status: value.status as ProgressStep["status"] };
+  });
+  if (Buffer.byteLength(JSON.stringify(steps)) > PROGRESS_BYTES) throw new InputError("progress 总长度超过 4096 字节");
+  return steps;
+}
 
 /** Missing figures stay missing: zero is a price or token count that was actually reported. */
 export function addUsage(total: Usage | undefined, more: Usage | undefined): Usage | undefined {

@@ -1,8 +1,10 @@
 // Codex: the user's own, installed and signed in by them. A run is a `codex exec` in the background; its thread is kept
 // on disk, so a retry or an answer can go on in it, and the link opens it in the app.
+import { estimateCost } from "./cost.ts";
 import { execFileSync } from "node:child_process";
 import { commandLine, powershell, psQuote } from "../../host/command.ts";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
+import { parseProgress, type ProgressStep } from "../../protocol/validate.ts";
 
 const SANDBOX = { read: "read-only", edit: "workspace-write", full: "danger-full-access" };
 export const IN_THE_APP = [
@@ -42,7 +44,7 @@ export default {
         turn.prompt,
     ];
   },
-  read(stdout, code, stderr) {
+  read(stdout, code, stderr, context) {
     const seen: {
       text?: string;
       session?: string;
@@ -51,6 +53,7 @@ export default {
       finished?: boolean;
       started?: boolean;
       completed?: boolean;
+      progress?: ProgressStep[];
     } = {};
     for (const line of stdout.split("\n")) {
       let event: any;
@@ -62,8 +65,32 @@ export default {
       // A login shell's profile prints here too, and `null` is valid JSON.
       if (!event) continue;
       if (event.type === "thread.started") seen.session = event.thread_id;
-      else if (event.type === "turn.started") seen.started = true;
-      else if (event.type === "item.completed" && event.item?.type === "agent_message") seen.text = event.item.text;
+      else if (event.type === "turn.started") {
+        seen.started = true;
+        if (seen.progress !== undefined) seen.progress = [];
+      } else if (
+        ["item.started", "item.updated", "item.completed"].includes(event.type) &&
+        event.item?.type === "todo_list"
+      ) {
+        try {
+          if (
+            !Array.isArray(event.item.items) ||
+            event.item.items.some(
+              (todo: any) => !todo || typeof todo.text !== "string" || typeof todo.completed !== "boolean",
+            )
+          )
+            throw new Error("invalid todo list");
+          seen.progress = parseProgress(
+            event.item.items.map((todo: any, index: number) => ({
+              id: `codex-${index}`,
+              title: todo.text,
+              status: todo.completed === true ? "completed" : "pending",
+            })),
+          );
+        } catch {
+          seen.progress = [];
+        }
+      } else if (event.type === "item.completed" && event.item?.type === "agent_message") seen.text = event.item.text;
       else if (event.type === "turn.completed") {
         seen.completed = seen.finished = true;
         // A reconnect is announced as an error event and then got over — it fell back to another transport and carried
@@ -81,6 +108,10 @@ export default {
     if (!completed) delete reading.text;
     if (code !== null && !completed && !reading.error) reading.error = tail(stderr) || "Codex 没有完成并留下实际结果";
     if (completed && !reading.text?.trim()) reading.error = "Codex 没有完成并留下实际结果";
+    if (code !== null && reading.session && context?.startedAt !== undefined) {
+      const estimatedCost = estimateCost(reading.session, context.startedAt);
+      if (estimatedCost !== undefined) return { ...reading, usage: { estimatedCost } };
+    }
     return reading;
   },
   link: (session) => `codex://threads/${session}`,

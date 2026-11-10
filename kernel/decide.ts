@@ -27,6 +27,7 @@ import {
   ANSWER_TEXT,
   DELIVERY_REF,
   parseEvent,
+  parseProgress,
   parseResult,
   type Later,
   type Rejected,
@@ -51,7 +52,18 @@ const CARD_BASICS = { text: "", options: "[]", recommend: null, about: "", state
 const DEFAULTS: Partial<Record<Table, Row>> = {
   runs: {
     attempts: 0,
-    ...nulls("claim", "issued", "last_issued", "last_result", "last_answer", "cancel_at", "resume", "session", "link"),
+    ...nulls(
+      "claim",
+      "issued",
+      "last_issued",
+      "last_result",
+      "last_answer",
+      "cancel_at",
+      "resume",
+      "session",
+      "link",
+      "progress",
+    ),
     ...nulls("claimed_at", "seen_at", "finished_at", "summary", "error", "usage"),
   },
   cards: {
@@ -302,10 +314,19 @@ function sweep(draft: Draft) {
   }
 }
 
-function claimNext(draft: Draft, worker: string, claim: string) {
+function claimNext(
+  draft: Draft,
+  worker: string,
+  claim: string,
+  workspaces: Record<string, string> | null = null,
+  replay = false,
+) {
   const agents = agentsOf(draft.view, worker);
-  const runs = rows(draft.view, "runs", { state: ["queued", "claimed"] });
+  const runs = rows(draft.view, "runs", { state: ["queued", "claimed", "unknown"] });
   const claimed = runs.filter((run) => run.state === "claimed");
+  const workspaceHeld = runs.filter(
+    (run) => (run.state === "claimed" || run.state === "unknown") && workerOf(draft.view, run) === worker,
+  );
   const groupLimit = (group: string) => draft.rules.rules.find((rule) => rule.group === group)?.parallel ?? 1;
   // What was queued before a pause, or an answer that came in during one, waits for the resume.
   const unpaused = (name: string) => {
@@ -318,6 +339,13 @@ function claimNext(draft: Draft, worker: string, claim: string) {
     Date.parse(run.not_before) <= draft.now &&
     unpaused(run.rule) &&
     !claimed.some((other) => other.grp === run.grp && other.lane === run.lane) &&
+    (!workspaces ||
+      (workspaces[ruleNamed(draft, run.rule)?.cwd ?? ""] !== undefined &&
+        !workspaceHeld.some((other) => {
+          const oldCwd = ruleOf(configuration(draft.view, other.rules_version), other.rule)?.cwd;
+          const identity = other.workspace ?? (oldCwd ? workspaces[oldCwd] : undefined);
+          return identity && identity === workspaces[ruleNamed(draft, run.rule)?.cwd ?? ""];
+        }))) &&
     claimed.filter((other) => other.grp === run.grp).length < groupLimit(run.grp);
   // The same claim again means the answer got lost: it gets back the run it already has.
   const held = claimed.find((run) => run.claim === claim && workerOf(draft.view, run) === worker);
@@ -329,8 +357,21 @@ function claimNext(draft: Draft, worker: string, claim: string) {
   }
   const since = held ? { claimed_at: run.claimed_at, link: run.link } : { claimed_at: draft.at, link: null };
   const rules_version = held ? run.rules_version : draft.view.get("config", "rules")!.version;
-  const claiming = { state: "claimed", claim, issued: draft.seq, seen_at: draft.at, rules_version, ...since };
-  put(draft, "runs", run.id, { ...claiming, ...nulls("last_issued", "last_result", "last_answer") });
+  const claiming = {
+    state: "claimed",
+    claim,
+    issued: held && replay ? run.issued : draft.seq,
+    seen_at: draft.at,
+    rules_version,
+    ...since,
+  };
+  const cwd = ruleNamed(draft, run.rule)?.cwd;
+  put(draft, "runs", run.id, {
+    ...claiming,
+    ...(!held && workspaces && cwd && { workspace: workspaces[cwd] }),
+    ...(!held && nulls("progress")),
+    ...nulls("last_issued", "last_result", "last_answer"),
+  });
   return jobOf(draft.view, draft.view.get("runs", run.id)!, draft.env);
 }
 
@@ -713,14 +754,19 @@ const HANDLERS: Record<string, (draft: Draft, ...args: any[]) => unknown> = {
   },
   claimNext,
   started(draft, id, token, given) {
-    const { session, link } = given ?? {};
+    const { session, link, progress } = given ?? {};
     for (const [field, value] of Object.entries({ session, link })) {
       if (value !== undefined && (typeof value !== "string" || value.length > 500)) {
         throw new InputError(`${field} 要是 500 字以内的文字`);
       }
     }
     const run = heldRun(draft, id, token, ["claimed"]);
-    put(draft, "runs", id, { session: session ?? run.session, link: link ?? run.link, seen_at: draft.at });
+    put(draft, "runs", id, {
+      session: session ?? run.session,
+      link: link ?? run.link,
+      ...(progress !== undefined && { progress: JSON.stringify(parseProgress(progress)) }),
+      seen_at: draft.at,
+    });
   },
   finish,
   cancel(draft, id) {

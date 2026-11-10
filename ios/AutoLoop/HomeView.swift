@@ -1,6 +1,10 @@
 import SwiftUI
 import Charts
 
+private enum HomeDestination: Hashable {
+    case statistics
+}
+
 struct HomeView: View {
     @StateObject private var settings = AppSettings.shared
     @State private var state: HubState?
@@ -10,6 +14,7 @@ struct HomeView: View {
     @State private var ruleBusy = false
     @State private var ruleError: String?
     @State private var confirmPauseAll = false
+    @State private var recentExpanded = false
     @ObservedObject private var deepLink = DeepLink.shared
 
     /// 已经退役的规则名：历史轮次还留在中台日志里，首页不再展示。
@@ -23,56 +28,69 @@ struct HomeView: View {
             List {
                 if let state {
                     Section {
-                        HeroCard(state: state, buckets: ChartData.hourly(state.runs))
-                            .listRowInsets(EdgeInsets())
-                            .listRowBackground(Color.clear)
+                        Button {
+                            path.append(HomeDestination.statistics)
+                        } label: {
+                            HeroCard(state: state, buckets: ChartData.hourly(state.runs.filter { $0.state == "done" }))
+                        }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                     }
 
-                    nowSection(state)
 
                     if !state.cards.isEmpty {
-                        Section("需要你决定") {
+                        Section("待你处理 · \(state.cards.count)") {
                             ForEach(state.cards) { card in
                                 NavigationLink(value: card) { CardRow(card: card) }
                             }
                         }
                     }
 
+                    nowSection(state)
+
+
                     recentSection(state)
                     agentSection(state)
                 }
             }
             .listStyle(.insetGrouped)
+            .listSectionSpacing(16)
+            .contentMargins(.top, 8, for: .scrollContent)
             .navigationTitle("首页")
-            .navigationDestination(for: HubRun.self) { RunDetailView(run: $0) }
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: HubRun.self) { RunDetailView(run: $0).id($0.id) }
             .navigationDestination(for: HubCard.self) { CardDetailView(card: $0) }
+            .navigationDestination(for: HomeDestination.self) { _ in
+                StatisticsView(state: state, runs: runs)
+            }
             .refreshable { await load() }
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        confirmPauseAll = true
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        NavigationLink {
+                            StatisticsView(state: state, runs: runs)
+                        } label: {
+                            Label("查看统计", systemImage: "chart.bar.xaxis")
+                        }
+                        .disabled(state == nil)
+                        Divider()
+                        Button {
+                            confirmPauseAll = true
+                        } label: {
+                            Label("暂停全部规则", systemImage: "pause.circle")
+                        }
+                        .disabled(ruleBusy || ruleCount == 0 || pausedRuleCount == ruleCount)
+                        Button {
+                            Task { await resumeAllRules() }
+                        } label: {
+                            Label("恢复全部规则", systemImage: "play.circle")
+                        }
+                        .disabled(ruleBusy || pausedRuleCount == 0)
                     } label: {
-                        Image(systemName: "pause.circle")
+                        Image(systemName: "ellipsis.circle")
                     }
-                    .tint(.orange)
-                    .disabled(ruleBusy || ruleCount == 0 || pausedRuleCount == ruleCount)
-                    .accessibilityLabel("暂停全部规则")
-
-                    Button {
-                        Task { await resumeAllRules() }
-                    } label: {
-                        Image(systemName: "play.circle")
-                    }
-                    .tint(.green)
-                    .disabled(ruleBusy || pausedRuleCount == 0)
-                    .accessibilityLabel("恢复全部规则")
-
-                    NavigationLink {
-                        StatisticsView(state: state, runs: runs)
-                    } label: {
-                        Image(systemName: "chart.bar.xaxis")
-                    }
-                    .disabled(state == nil)
+                    .accessibilityLabel("首页操作")
                 }
             }
             .overlay {
@@ -111,9 +129,11 @@ struct HomeView: View {
                     path.append(run)
                 }
                 openPendingCard()
+                openPendingRun()
                 await poll()
             }
         }
+        .onChange(of: deepLink.run) { openPendingRun() }
     }
 
     // MARK: - 现在
@@ -121,25 +141,34 @@ struct HomeView: View {
     @ViewBuilder
     private func nowSection(_ state: HubState) -> some View {
         let t = state.totals
-        let active = state.runs
+        let allActive = state.runs
             .filter { ["claimed", "queued", "unknown"].contains($0.state) }
             .sorted { ($0.state == "claimed" ? 0 : 1, -$0.id) < ($1.state == "claimed" ? 0 : 1, -$1.id) }
-            .prefix(4)
+        let active = Array(allActive.prefix(4))
         let nextBatch = (state.lines ?? [])
             .filter { $0.paused == nil }
             .compactMap { line in HubRun.date(line.next).map { (line.name, $0) } }
             .min { $0.1 < $1.1 }
         Section {
-            HStack(spacing: 0) {
-                NowStat(value: t.running, label: "在跑", color: .blue)
-                Divider().frame(height: 28)
-                NowStat(value: t.queued + t.retrying, label: "排队", color: .orange)
-                Divider().frame(height: 28)
-                NowStat(value: t.attention, label: "等你", color: t.attention > 0 ? .orange : .secondary)
+            if !allActive.isEmpty {
+                HStack(spacing: 14) {
+                    Label("执行 \(t.running)", systemImage: "play.circle.fill")
+                        .foregroundStyle(.blue)
+                    Label("排队 \(t.queued)", systemImage: "clock")
+                        .foregroundStyle(.secondary)
+                    if t.unknown > 0 {
+                        Label("未知 \(t.unknown)", systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+                .padding(.vertical, 4)
+            } else {
+                Label("暂无执行或排队任务", systemImage: "checkmark.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
-            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
 
             if let nextBatch {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -147,7 +176,7 @@ struct HomeView: View {
                         Image(systemName: "clock")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Text("下一批执行")
+                        Text("下次定时执行")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         Spacer()
@@ -170,31 +199,53 @@ struct HomeView: View {
                 .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 10, trailing: 16))
             }
 
-            ForEach(Array(active)) { run in
+            ForEach(active) { run in
                 NavigationLink(value: run) {
-                    HStack(spacing: 8) {
-                        Text("#\(run.id)")
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                        Text(run.rule)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                        Spacer()
-                        StateBadge(state: run.state)
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(run.rule)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                            Spacer(minLength: 4)
+                            Text("#\(run.id)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            StateBadge(state: run.state, stopping: run.state == "claimed" && run.stopping == true)
+                        }
+                        if run.state == "claimed" {
+                            HStack(spacing: 7) {
+                                ProgressView().controlSize(.small)
+                                Text(run.progress?.first(where: { $0.status == "running" })?.title ?? "Agent 正在执行")
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                if let steps = run.progress, !steps.isEmpty {
+                                    Text("\(steps.filter { $0.status == "completed" }.count)/\(steps.count)")
+                                        .monospacedDigit()
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        } else if run.state == "unknown" {
+                            Text("请检查接单程序连接")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
-                    .padding(.vertical, 5)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .padding(.vertical, 6)
                 }
             }
 
-            if state.runs.filter({ ["claimed", "queued", "unknown"].contains($0.state) }).count > 4 {
-                Text("还有 \(state.runs.filter { ["claimed", "queued", "unknown"].contains($0.state) }.count - 4) 轮，进「统计」看全部")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            if allActive.count > 4 {
+                NavigationLink {
+                    StatisticsView(state: state, runs: runs)
+                } label: {
+                    Text("查看全部 \(allActive.count) 个任务")
+                        .font(.subheadline)
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
             }
         } header: {
-            Text("现在")
+            Text("当前任务")
         }
     }
 
@@ -257,18 +308,20 @@ struct HomeView: View {
             if recent.isEmpty {
                 Text("还没有跑完的轮次").font(.subheadline).foregroundStyle(.secondary)
             } else {
-                ForEach(recent) { item in
+                ForEach(Array(recent.prefix(recentExpanded ? 5 : 3))) { item in
                     NavigationLink(value: item.run) {
                         RunRowView(run: item.run, repeatCount: item.count)
                     }
                 }
+                if recent.count > 3 {
+                    Button(recentExpanded ? "收起记录" : "展开最近 \(recent.count) 条记录") {
+                        recentExpanded.toggle()
+                    }
+                    .font(.subheadline)
+                }
             }
         } header: {
-            HStack {
-                Text("最新处理")
-                Spacer()
-                Text("近 5 轮").font(.caption2).foregroundStyle(.tertiary)
-            }
+            Text("最近处理")
         }
     }
 
@@ -276,25 +329,35 @@ struct HomeView: View {
 
     @ViewBuilder
     private func agentSection(_ state: HubState) -> some View {
-        Section("Agent") {
-            if state.agents.isEmpty {
-                Text("还没有接单的电脑").font(.subheadline).foregroundStyle(.secondary)
-            }
-            ForEach(state.agents) { agent in
-                HStack {
-                    Circle()
-                        .fill(agent.online ? Color.green : Color.secondary.opacity(0.4))
-                        .frame(width: 7, height: 7)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(agent.name).font(.subheadline)
-                        Text("\(agent.worker) · \(agent.use)")
+        Section {
+            DisclosureGroup {
+                if state.agents.isEmpty {
+                    Text("还没有接单的电脑").font(.subheadline).foregroundStyle(.secondary)
+                }
+                ForEach(state.agents) { agent in
+                    HStack {
+                        Circle()
+                            .fill(agent.online ? Color.green : Color.secondary.opacity(0.4))
+                            .frame(width: 7, height: 7)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(agent.name).font(.subheadline)
+                            Text("\(agent.worker) · \(agent.use)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(agent.online ? "在线" : "离线")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(agent.online ? .green : .secondary)
                     }
+                }
+            } label: {
+                HStack {
+                    Label("Agent", systemImage: "desktopcomputer")
                     Spacer()
-                    Text(agent.online ? "在线" : "离线")
-                        .font(.caption2)
-                        .foregroundStyle(agent.online ? .green : .secondary)
+                    Text("\(state.agents.filter { $0.online }.count)/\(state.agents.count) 在线")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -308,6 +371,13 @@ struct HomeView: View {
             await load()
             try? await Task.sleep(for: .seconds(15))
         }
+    }
+
+    private func openPendingRun() {
+        guard let run = deepLink.run else { return }
+        deepLink.run = nil
+        path = NavigationPath()
+        path.append(run)
     }
 
     private func openPendingCard() {
@@ -336,47 +406,123 @@ struct HomeView: View {
 struct HeroCard: View {
     let state: HubState
     let buckets: [HourBucket]
+    @ScaledMetric(relativeTo: .largeTitle) private var completionSize = 44
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
                 Text("今日完成")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Text("\(state.totals.doneToday)")
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundStyle(.green)
-                    .monospacedDigit()
+                    .font(.headline)
+                Spacer()
+                Label("统计", systemImage: "arrow.up.right")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.tint)
             }
 
-            Chart(buckets) { bucket in
-                BarMark(
-                    x: .value("时间", bucket.hour, unit: .hour),
-                    y: .value("轮次", bucket.count)
-                )
-                .foregroundStyle(Color.accentColor.opacity(0.75))
-                .cornerRadius(2)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 24) {
+                    completedCount
+                    trend.frame(minWidth: 130)
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    completedCount
+                    trend
+                }
             }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .frame(height: 46)
 
-            HStack(spacing: 14) {
-                Label("累计 \(state.totals.done)", systemImage: "checkmark.circle")
-                Label(money(state.totals.usage.cost), systemImage: "creditcard")
-                Label(tokens(state.totals.usage.tokens), systemImage: "text.word.spacing")
+            Divider()
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 16) {
+                    metric("累计完成", value: "\(state.totals.done) 轮")
+                    metric("今日 Token", value: state.spending?.today.map { tokens($0.tokens) } ?? "—")
+                    metric("今日估算", value: state.spending?.today?.estimateText ?? "未估算")
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    metric("累计完成", value: "\(state.totals.done) 轮")
+                    metric("今日 Token", value: state.spending?.today.map { tokens($0.tokens) } ?? "—")
+                    metric("今日估算", value: state.spending?.today?.estimateText ?? "未估算")
+                }
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    onlineStatus
+                    Spacer(minLength: 12)
+                    Text("官方价估算 · 仅含已知用量")
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    onlineStatus
+                    Text("官方价估算 · 仅含已知用量")
+                }
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
-            .labelStyle(.titleAndIcon)
         }
-        .padding(16)
+        .padding(18)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private func money(_ value: Double) -> String {
-        value >= 100 ? String(format: "$%.0f", value) : String(format: "$%.2f", value)
+    private var onlineStatus: some View {
+        Label("\(state.agents.filter { $0.online }.count)/\(state.agents.count) 在线", systemImage: "desktopcomputer")
     }
+
+    private var completedCount: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text("\(state.totals.doneToday)")
+                .font(.system(size: completionSize, weight: .bold, design: .rounded))
+                .foregroundStyle(.green)
+                .monospacedDigit()
+            Text("轮")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var trend: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("12 小时完成 · 近 60 轮")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Chart(buckets) { bucket in
+                BarMark(x: .value("时间", bucket.hour, unit: .hour), y: .value("完成轮次", bucket.count))
+                    .foregroundStyle(Color.green.opacity(0.75))
+                    .cornerRadius(2)
+            }
+            .chartYScale(domain: 0...max(1, buckets.map(\.count).max() ?? 0))
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .hour, count: 4)) { value in
+                    AxisValueLabel {
+                        if let date = value.as(Date.self) {
+                            Text(Self.hourFormatter.string(from: date)).font(.caption2)
+                        }
+                    }
+                }
+            }
+            .chartYAxis(.hidden)
+            .frame(height: 48)
+        }
+    }
+
+    private func metric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static let hourFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "H时"
+        return formatter
+    }()
 
     private func tokens(_ value: Int) -> String {
         value >= 1_000_000 ? String(format: "%.1fM", Double(value) / 1_000_000)
@@ -385,25 +531,6 @@ struct HeroCard: View {
 }
 
 // MARK: - 小部件
-
-struct NowStat: View {
-    let value: Int
-    let label: String
-    let color: Color
-
-    var body: some View {
-        VStack(spacing: 2) {
-            Text("\(value)")
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
-                .foregroundStyle(value > 0 ? color : Color.secondary)
-                .monospacedDigit()
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
 
 struct CardRow: View {
     let card: HubCard
@@ -497,7 +624,7 @@ struct RunRowView: View {
                         .monospacedDigit()
                 }
                 Spacer()
-                StateBadge(state: run.state)
+                StateBadge(state: run.state, stopping: run.state == "claimed" && run.stopping == true)
             }
             let prose = ChangeParser.prose(run.summary)
             if !prose.isEmpty {
@@ -505,6 +632,9 @@ struct RunRowView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+            }
+            if run.state == "claimed" {
+                RunProgressView(run: run, showSteps: false)
             }
             HStack(spacing: 8) {
                 if let finished = run.finished {
@@ -527,10 +657,12 @@ struct RunRowView: View {
 
 struct StateBadge: View {
     let state: String
+    var stopping = false
 
     var body: some View {
         let (text, color): (String, Color) = {
-            switch state {
+            if stopping && ["claimed", "queued", "unknown"].contains(state) { return ("停止中", .orange) }
+            return switch state {
             case "claimed": ("在跑", .blue)
             case "queued": ("排队", .orange)
             case "unknown": ("未知", .orange)
@@ -574,4 +706,54 @@ struct HourBucket: Identifiable {
     var id: Date { hour }
     let hour: Date
     let count: Int
+}
+
+struct RunProgressView: View {
+    let run: HubRun
+    var showSteps = false
+
+    private var steps: [HubProgressStep] { run.progress ?? [] }
+    private var completed: Int { steps.filter { $0.status == "completed" }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if run.state == "claimed" {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    if let current = steps.first(where: { $0.status == "running" }) {
+                        Text(current.title)
+                            .font(.caption)
+                            .lineLimit(2)
+                    } else {
+                        Text("Agent 正在执行")
+                            .font(.caption)
+                    }
+                }
+                .foregroundStyle(.secondary)
+                if !steps.isEmpty {
+                    Text("Agent 计划 · 已完成 \(completed)/\(steps.count)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            if showSteps {
+                ForEach(steps) { step in
+                    HStack(alignment: .top, spacing: 8) {
+                        if step.status == "running" && run.state == "claimed" {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            let completed = step.status == "completed"
+                            Image(systemName: completed ? "checkmark.circle.fill" : (step.status == "running" ? "play.circle" : "circle"))
+                                .foregroundStyle(completed ? .green : .secondary)
+                                .frame(width: 12)
+                        }
+                        Text(step.title)
+                            .font(.subheadline)
+                            .foregroundStyle(step.status == "completed" ? .secondary : .primary)
+                    }
+                }
+            }
+        }
+        .padding(.top, 2)
+    }
 }

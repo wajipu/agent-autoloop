@@ -31,12 +31,37 @@ export function hubClient(url: string, key: string) {
   }
   return {
     // The worker's door.
-    work({ claim, wait, running, capacity }: { claim: string; wait: number; running: number[]; capacity: boolean }) {
-      const query = { claim, wait: String(wait), running: running.join(","), capacity: capacity ? "1" : "0" };
+    work({
+      claim,
+      wait,
+      running,
+      capacity,
+      workspaces,
+      negotiate,
+    }: {
+      claim: string;
+      wait: number;
+      running: number[];
+      capacity: boolean;
+      workspaces?: string[];
+      negotiate?: boolean;
+    }) {
+      const query = {
+        claim,
+        wait: String(wait),
+        running: running.join(","),
+        capacity: capacity ? "1" : "0",
+        ...(negotiate && { workspace: "1" }),
+        ...(workspaces && { workspaces: workspaces.join(",") }),
+      };
       return call("GET", `/v1/work?${new URLSearchParams(query)}`, { timeout: wait + 30 });
     },
-    started: (run: number, token: string, body: { session?: string; link?: string }) =>
-      call("POST", `/v1/runs/${run}/started`, { token, body }),
+    started: (
+      run: number,
+      token: string,
+      body: { session?: string; link?: string; progress?: unknown },
+      timeout = 30,
+    ) => call("POST", `/v1/runs/${run}/started`, { token, body, timeout }),
     result: (run: number, token: string, body: unknown) => call("POST", `/v1/runs/${run}/result`, { token, body }),
     // The channel's door.
     nextCard: (wait: number) => call("GET", `/v1/cards/next?wait=${wait}`, { timeout: wait + 30 }),

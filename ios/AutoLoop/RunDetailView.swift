@@ -3,11 +3,27 @@ import SwiftUI
 // MARK: - 轮次详情
 
 struct RunDetailView: View {
-    let run: HubRun
+    @State private var run: HubRun
     @StateObject private var settings = AppSettings.shared
     @State private var steps: [TimelineStep]?
     @State private var web: WebSheet?
     @State private var error: String?
+    @State private var statusError: String?
+    @State private var operationError: String?
+    @State private var operationMessage: String?
+    @State private var statusLoaded = false
+    @State private var canActOnLatest = false
+    @State private var operationBusy = false
+    @State private var confirmCancel = false
+
+    init(run: HubRun) {
+        _run = State(initialValue: run)
+    }
+
+    private var isActive: Bool { ["queued", "claimed", "unknown"].contains(run.state) }
+    private var canRequestCancel: Bool {
+        statusLoaded && canActOnLatest && !operationBusy && run.stopping != true && ["queued", "claimed"].contains(run.state)
+    }
 
     var body: some View {
         List {
@@ -17,7 +33,7 @@ struct RunDetailView: View {
                         Text("#\(run.id)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        StateBadge(state: run.state)
+                        StateBadge(state: run.state, stopping: run.state == "claimed" && run.stopping == true)
                         if run.attempts > 0 {
                             Text("第 \(run.attempts + 1) 次")
                                 .font(.caption2)
@@ -34,6 +50,45 @@ struct RunDetailView: View {
                     }
                 }
                 .padding(.vertical, 4)
+            }
+
+            if let operationMessage {
+                Section {
+                    Label(operationMessage, systemImage: "checkmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            if run.state == "claimed" || !(run.progress ?? []).isEmpty {
+                Section("Agent执行步骤") {
+                    RunProgressView(run: run, showSteps: true)
+                }
+            }
+
+            if isActive {
+                Section("任务操作") {
+                    if statusLoaded && !canActOnLatest, let statusError {
+                        Text(statusError).font(.footnote).foregroundStyle(.orange)
+                    } else if run.state == "unknown" {
+                        Label("状态未知，请检查接单程序连接。", systemImage: "wifi.exclamationmark")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    } else if run.state == "claimed" && run.stopping == true {
+                        Label("停止请求已提交，等待接单程序确认。", systemImage: "stop.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    } else if canRequestCancel {
+                        Button(run.state == "queued" ? "取消排队任务" : "请求停止这一轮", role: .destructive) {
+                            confirmCancel = true
+                        }
+                        .disabled(operationBusy)
+                    } else if let statusError {
+                        Text(statusError).font(.footnote).foregroundStyle(.orange)
+                    } else {
+                        HStack { ProgressView(); Text("正在确认最新状态…").font(.footnote).foregroundStyle(.secondary) }
+                    }
+                }
             }
 
             let changes = ChangeParser.parse(run.summary)
@@ -183,25 +238,90 @@ struct RunDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .refreshable { await load() }
         .navigationTitle("第 \(run.id) 轮")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $web) { web in
             SafariSheet(url: web.url)
         }
-        .task { await load() }
+        .confirmationDialog(run.state == "queued" ? "取消这个排队任务？" : "请求停止这一轮？",
+                            isPresented: $confirmCancel, titleVisibility: .visible) {
+            Button(run.state == "queued" ? "取消排队" : "请求停止", role: .destructive) {
+                Task { await cancelRun() }
+            }
+            Button("返回", role: .cancel) {}
+        }
+        .alert("操作失败", isPresented: Binding(
+            get: { operationError != nil },
+            set: { if !$0 { operationError = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(operationError ?? "")
+        }
+        .task {
+            await load()
+            while !Task.isCancelled && isActive {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { break }
+                await refreshRunState(using: HubClient(baseURL: settings.hubURL, key: settings.hubKey))
+            }
+        }
     }
 
     private func load() async {
         guard settings.hubConfigured else {
             error = "还没配中台"
+            statusError = "去「设置」填中台地址和本人密钥"
+            statusLoaded = true
+            canActOnLatest = false
             return
         }
         let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+        await refreshRunState(using: client)
         do {
             let facts = try await client.why(runID: run.id)
             steps = Timeline.build(facts: facts, runID: run.id)
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func refreshRunState(using client: HubClient) async {
+        do {
+            let latest = try await client.state()
+            if let found = latest.runs.first(where: { $0.id == run.id }) {
+                run = found
+                canActOnLatest = true
+                statusError = nil
+            } else {
+                canActOnLatest = false
+                statusError = "当前状态列表里没有这一轮，请刷新后再操作。"
+            }
+            statusLoaded = true
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+            canActOnLatest = false
+            statusLoaded = true
+            statusError = "无法确认最新状态：\(error.localizedDescription)"
+        }
+    }
+
+    private func cancelRun() async {
+        guard !operationBusy else { return }
+        operationBusy = true
+        defer { operationBusy = false }
+        operationMessage = nil
+        operationError = nil
+        let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+        await refreshRunState(using: client)
+        guard canActOnLatest, ["queued", "claimed"].contains(run.state), run.stopping != true else { return }
+        do {
+            try await client.cancelRun(id: run.id)
+            operationMessage = "请求已提交。"
+            await refreshRunState(using: client)
+        } catch {
+            operationError = error.localizedDescription
         }
     }
 

@@ -48,6 +48,16 @@
         "minimum": 0
       }
     },
+    "progressStep": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "status": { "enum": ["pending", "running", "completed"] }
+      },
+      "required": ["id", "title", "status"],
+      "additionalProperties": false
+    },
     "ask": {
       "type": "object",
       "properties": {
@@ -303,6 +313,12 @@
         "link": {
           "type": "string",
           "maxLength": 500
+        },
+        "progress": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "$ref": "#/$defs/progressStep" },
+          "description": "Optional display-only snapshot reported by a structured Agent event."
         }
       },
       "required": [],

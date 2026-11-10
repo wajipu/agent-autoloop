@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { findOnPath } from "../host/command.ts";
 import { loadPlugin } from "../host/plugins.ts";
-import type { Usage } from "../protocol/validate.ts";
+import type { ProgressStep, Usage } from "../protocol/validate.ts";
 
 export type { Usage } from "../protocol/validate.ts";
 export type Access = "read" | "edit" | "full";
@@ -37,16 +37,20 @@ export type Reading = {
   finished?: boolean;
   /** It has this turn's prompt, in a conversation that's there. From here on the work may be half done. */
   started?: boolean;
+  /** A plan only when the program reports one through a structured native event. */
+  progress?: ProgressStep[];
 };
 export type Adapter = {
   /** Its command line for this turn. */
   command(turn: Turn): string[];
   /** What its output says so far. `code` is null while it's still running or when it died without saying. */
-  read(stdout: string, code: number | null, stderr: string): Reading;
+  read(stdout: string, code: number | null, stderr: string, context?: { startedAt?: number }): Reading;
   /** Where a person can open this session. */
   link?(session: string): string;
   /** Whether it's installed and signed in, as `program` if its rules name one: what's wrong, in words a person can act on, or nothing. */
   check?(program?: string): string | null;
+  /** Per-process environment additions, kept out of the worker and other agents. */
+  environment?(): NodeJS.ProcessEnv;
 };
 
 const adapters = new Map<string, Adapter>();

@@ -1,9 +1,12 @@
 // The doors: every request the hub takes, which key it asks for, and which input it becomes. Nothing is decided here.
+import { createHash } from "node:crypto";
 import { cardPage, PAGE_HEADERS, wordsPage } from "./card-page.ts";
 import { whose, type Environment } from "./credentials.ts";
 import { AuthError, Conflict, InputError, NotFound } from "./errors.ts";
 import type { Row, View } from "./evolve.ts";
-import { agentsOf, cancels, cardView, configuration, eventOutcome } from "./query.ts";
+import { agentsOf, cancels, cardView, configuration, eventOutcome, workerOf } from "./query.ts";
+import { rows } from "./evolve.ts";
+import { ruleOf } from "./rules.ts";
 import { isAsk } from "../protocol/validate.ts";
 
 export type Services = {
@@ -161,13 +164,59 @@ async function work(call: Call) {
   if (!claim || claim.length > 200) throw new InputError("claim 是这次领活的编号，最多 200 字");
   const running = (url.searchParams.get("running") ?? "").split(",").filter((id) => POSITIVE_ID.test(id));
   act(call, "heartbeat", worker, running.map(Number));
+  const negotiating = url.searchParams.get("workspace") === "1";
+  const candidatesFor = (rules: typeof call.rules, view = services.view()) => [
+    ...new Set(
+      rules.rules
+        .filter((rule) => rules.agents[rule.to]?.worker === worker)
+        .map(({ cwd }) => cwd)
+        .concat(
+          rules.elsewhere.filter((task) => task.cwd && rules.agents[task.to]?.worker === worker).map(({ cwd }) => cwd!),
+        )
+        .concat(
+          rows(view, "runs", { state: ["claimed", "unknown"] })
+            .filter((run) => workerOf(view, run) === worker)
+            .map((run) => ruleOf(configuration(view, run.rules_version), run.rule)?.cwd)
+            .filter((cwd): cwd is string => !!cwd),
+        ),
+    ),
+  ];
+  const candidates = negotiating ? candidatesFor(call.rules) : [];
+  if (negotiating && candidates.length > 80)
+    throw new InputError("这台接单程序配置了超过 80 个不同工作目录，暂不能协商互斥");
+  const rawWorkspaces = negotiating ? url.searchParams.get("workspaces") : null;
+  if (rawWorkspaces && rawWorkspaces.length > 12_000) throw new InputError("工作目录协商参数超过 12000 字符");
+  const pairs = rawWorkspaces === "" && candidates.length === 0 ? [] : (rawWorkspaces?.split(",") ?? null);
+  if (
+    negotiating &&
+    (!pairs || pairs.length !== candidates.length || pairs.some((value) => !/^[a-f0-9]{64}:[a-f0-9]{64}$/.test(value)))
+  ) {
+    return json({ job: null, cancel: cancels(services.view(), worker), workspaces: candidates });
+  }
+  const supplied = new Map(pairs?.map((pair) => pair.split(":")) as [string, string][] | undefined);
+  const workspaces = negotiating
+    ? Object.fromEntries(
+        candidates.flatMap((cwd) => {
+          const key = createHash("sha256").update(cwd).digest("hex");
+          const identity = supplied.get(key);
+          return identity ? [[cwd, identity]] : [];
+        }),
+      )
+    : null;
   const until = waitUntil(call);
   for (;;) {
     if (!whose(services.view(), "worker", token)) throw new AuthError("密钥已失效");
+    const currentCandidates = negotiating ? candidatesFor(configuration(services.view())) : [];
+    if (negotiating && currentCandidates.length > 80) {
+      throw new InputError("这台接单程序配置了超过 80 个不同工作目录，暂不能协商互斥");
+    }
+    if (negotiating && currentCandidates.some((cwd) => workspaces![cwd] === undefined))
+      return json({ job: null, cancel: cancels(services.view(), worker), workspaces: currentCandidates });
     const wantsWork = !request.signal.aborted && url.searchParams.get("capacity") !== "0";
-    const job = wantsWork ? act(call, "claimNext", worker, claim) : null;
+    const job = wantsWork ? act(call, "claimNext", worker, claim, negotiating ? workspaces : null, negotiating) : null;
     const cancel = cancels(services.view(), worker);
-    if (job || cancel.length || services.now() >= until || request.signal.aborted) return json({ job, cancel });
+    if (job || cancel.length || services.now() >= until || request.signal.aborted)
+      return json({ job, cancel, ...(negotiating && { workspaces: currentCandidates }) });
     await services.wait(until, request.signal);
   }
 }

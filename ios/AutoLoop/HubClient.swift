@@ -90,6 +90,8 @@ struct HubRun: Decodable, Identifiable, Hashable {
     let error: String?
     let link: String?
     let session: String?
+    let stopping: Bool?
+    let progress: [HubProgressStep]?
     let events: [HubEvent]?
 
     var created: Date? { HubRun.date(createdAt) }
@@ -109,6 +111,12 @@ struct HubRun: Decodable, Identifiable, Hashable {
     }
 }
 
+struct HubProgressStep: Decodable, Hashable, Identifiable {
+    let id: String
+    let title: String
+    let status: String
+}
+
 struct HubEvent: Decodable, Hashable {
     let source: String
     let type: String
@@ -121,6 +129,41 @@ struct HubSpending: Decodable {
     let rounds: Int
     let tokens: Int
     let cost: Double
+    let missingTokens: Int?
+    let missingCost: Int?
+    let estimatedCost: Double?
+    let missingEstimatedCost: Int?
+
+    var estimateText: String {
+        guard rounds > 0 else { return "暂无记录" }
+        guard let estimatedCost, let missingEstimatedCost else { return costText }
+        guard missingEstimatedCost < rounds else { return "未估算" }
+        if estimatedCost > 0 && estimatedCost < 0.0001 { return "约 <$0.0001" }
+        return String(format: estimatedCost > 0 && estimatedCost < 0.01 ? "约 $%.4f" : "约 $%.2f", estimatedCost)
+    }
+
+    var estimateCoverage: String {
+        guard rounds > 0 else { return "暂无执行记录" }
+        guard let missingEstimatedCost else { return costCoverage }
+        if missingEstimatedCost == rounds { return "\(rounds) 轮缺少可估算的模型或用量记录" }
+        if missingEstimatedCost > 0 { return "另有 \(missingEstimatedCost) 轮未估算，未计入合计" }
+        return "\(rounds) 轮均有参考费用"
+    }
+
+    var costText: String {
+        guard rounds > 0 else { return "暂无记录" }
+        let reported = missingCost.map { $0 < rounds } ?? (cost > 0)
+        guard reported else { return "未上报" }
+        return String(format: cost > 0 && cost < 0.01 ? "$%.4f" : "$%.2f", cost)
+    }
+
+    var costCoverage: String {
+        guard rounds > 0 else { return "暂无执行记录" }
+        guard let missingCost else { return "费用上报情况未知" }
+        if missingCost == rounds { return "\(rounds) 轮均未上报费用" }
+        if missingCost > 0 { return "已上报合计，另有 \(missingCost) 轮未上报" }
+        return "\(rounds) 轮均已上报费用"
+    }
 }
 
 struct HubState: Decodable {
@@ -205,6 +248,25 @@ struct HubClient {
             throw HubError.http(http.statusCode, body)
         }
         return try decode(data)
+    }
+
+    func cancelRun(id: Int) async throws {
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespaces) + "/v1/runs/\(id)/cancel") else {
+            throw HubError.notConfigured
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("{}".utf8)
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let body = object?["error"] as? String ?? String(data: data.prefix(200), encoding: .utf8) ?? ""
+            throw HubError.http(code, body)
+        }
     }
 
     /// 一轮的时间线：/v1/runs/<id>/why 返回的原始事实，交给 Timeline 归并成人话。

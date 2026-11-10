@@ -3,7 +3,7 @@
 // find it still going, or finished. A job is saved before anything slow happens; a result is saved before it's handed
 // in and stays until the hub has taken it.
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -11,6 +11,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   readSync,
   renameSync,
   rmSync,
@@ -24,7 +25,7 @@ import { HubError, type Hub } from "../protocol/client.ts";
 import { HOME } from "../host/home.ts";
 import { commandLine, processCommand } from "../host/command.ts";
 import type { Job } from "../protocol/job.ts";
-import { addUsage, type Notice, type Result } from "../protocol/validate.ts";
+import { addUsage, type Notice, type ProgressStep, type Result } from "../protocol/validate.ts";
 import { adapterFor, type Adapter, type Reading, type Turn, type Usage } from "./agents.ts";
 import { promptFor, readMessage, repairPrompt, resultFrom } from "./contract.ts";
 import { loadUsage, saveUsage, usageDelta } from "./usage.ts";
@@ -69,6 +70,9 @@ type Entry = {
   stopping?: number;
   why?: "cancel" | "timeout" | "finished";
   result?: Result;
+  progress?: ProgressStep[];
+  progressSent?: string;
+  progressUnsupported?: boolean;
 };
 export type WorkerHub = Pick<Hub, "work" | "started" | "result">;
 export type WorkerOptions = {
@@ -191,6 +195,9 @@ export function createWorker({
   now = Date.now,
 }: WorkerOptions) {
   let claim = randomUUID();
+  let workspaceMap: Record<string, string> | undefined;
+  let workspaceValues: string[] | undefined;
+  let workspacePaths: Record<string, string> = {};
   let unreachableSince: number | null = null;
   let told = false;
   let tries = 0;
@@ -216,6 +223,8 @@ export function createWorker({
   /** Starts a turn of the agent: a process that outlives this one, leaving its output and exit code in files. */
   function launch(entry: Entry, adapter: Adapter, prompt: string) {
     entry.turn += 1;
+    if (entry.progress?.length) entry.progress = [];
+    else delete entry.progress;
     entry.launchedAt = now();
     entry.usageBaseline = entry.resume ? loadUsage(entry.job.agent.use, entry.resume) : undefined;
     delete entry.finishedAt;
@@ -257,7 +266,7 @@ export function createWorker({
           ],
           {
             cwd,
-            env: { ...agentEnvironment(entry), AGENT_AUTOLOOP_NODE: process.execPath },
+            env: { ...agentEnvironment(entry), ...adapter.environment?.(), AGENT_AUTOLOOP_NODE: process.execPath },
             detached: true,
             windowsHide: true,
             stdio: ["ignore", output, errors],
@@ -294,7 +303,7 @@ export function createWorker({
     const login = [process.env.SHELL ?? "/bin/sh", "-lc", 'exec /bin/sh "$AGENT_AUTOLOOP_COMMAND"'];
     const child = spawn("/bin/sh", ["-c", script, marker(entry), out, err, exit, ...login], {
       cwd,
-      env: { ...agentEnvironment(entry), AGENT_AUTOLOOP_COMMAND: command },
+      env: { ...agentEnvironment(entry), ...adapter.environment?.(), AGENT_AUTOLOOP_COMMAND: command },
       detached: true,
       stdio: "ignore",
     });
@@ -342,7 +351,9 @@ export function createWorker({
   function read(entry: Entry, adapter: Adapter, code: number | null): Reading {
     const { out, err } = files(entry);
     try {
-      const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err));
+      const reading = adapter.read(snapshot(out), code, code === null ? "" : snapshot(err), {
+        startedAt: entry.launchedAt,
+      });
       if (!reading) throw new Error("它什么也没给");
       return reading;
     } catch (error) {
@@ -350,6 +361,60 @@ export function createWorker({
       // One still going goes on, since this says nothing about how it's doing. Whether one that has ended got started isn't
       // known, and starting it again in a new session could do its work twice: it stays in this one.
       return { started: true, error: `读不懂这个 Agent 的输出：${(error as Error).message ?? error}` };
+    }
+  }
+
+  async function reportStarted(entry: Entry, adapter: Adapter, seen: Reading, timeout = 30) {
+    if (seen.progress !== undefined && JSON.stringify(seen.progress) !== JSON.stringify(entry.progress)) {
+      entry.progress = seen.progress;
+      save(entry);
+    }
+    if (seen.session && seen.session !== entry.session) {
+      entry.session = seen.session;
+      save(entry);
+    }
+    const session = seen.session ?? (adapter.link ? entry.session : undefined);
+    const tellSession = session !== entry.told ? session : undefined;
+    const progressKey = entry.progress === undefined ? undefined : JSON.stringify(entry.progress);
+    const tellProgress = !entry.progressUnsupported && progressKey !== undefined && progressKey !== entry.progressSent;
+    if (!tellSession && !tellProgress) return;
+    const requestTimeout = tellProgress ? Math.min(timeout, 2) : timeout;
+    try {
+      await hub.started(
+        entry.run,
+        entry.token,
+        {
+          ...(tellSession && { session: tellSession }),
+          ...(tellSession && adapter.link && { link: adapter.link(tellSession) }),
+          ...(tellProgress && { progress: entry.progress }),
+        },
+        requestTimeout,
+      );
+      if (tellSession) entry.told = tellSession;
+      if (tellProgress) entry.progressSent = progressKey;
+      save(entry);
+    } catch (error) {
+      if (tellProgress && error instanceof HubError && [400, 404, 405, 422].includes(error.status)) {
+        entry.progressUnsupported = true;
+        save(entry);
+        sayOnce(`run ${entry.run}: hub doesn't accept progress updates; continuing without them`);
+        if (tellSession) {
+          try {
+            await hub.started(
+              entry.run,
+              entry.token,
+              { session: tellSession, ...(adapter.link && { link: adapter.link(tellSession) }) },
+              timeout,
+            );
+            entry.told = tellSession;
+            save(entry);
+          } catch (fallback) {
+            sayOnce(`run ${entry.run}: couldn't say it started: ${fallback}`);
+          }
+        }
+      } else {
+        sayOnce(`run ${entry.run}: couldn't update progress or session: ${error}`);
+      }
     }
   }
 
@@ -368,9 +433,10 @@ export function createWorker({
   }
 
   /** A turn has ended. What it said is a result, or a reason to ask it again without redoing anything. */
-  function conclude(entry: Entry, adapter: Adapter, code: number | null) {
+  async function conclude(entry: Entry, adapter: Adapter, code: number | null) {
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
+    await reportStarted(entry, adapter, seen, 2);
     entry.usage = addUsage(addUsage(entry.usage, seen.usage), sessionRise(entry, seen));
     const session = seen.session ?? (entry.turn > 0 && adapter.link ? entry.session : undefined);
     if (seen.session) entry.session = seen.session;
@@ -455,7 +521,7 @@ export function createWorker({
         if (!overdue) return;
         signal(entry, "SIGKILL");
         // A turn that was over, or a timeout, ends on what it said: `failed` there is tried again, redoing work done.
-        if (entry.why !== "cancel") return conclude(entry, adapter, exitCode());
+        if (entry.why !== "cancel") return await conclude(entry, adapter, exitCode());
         // Reporting `cancelled` would release the item while a process may still be in it, which the protocol forbids
         // (docs/protocol.md: 确认组内没有活进程后才交 cancelled). A cancelled run's `failed` isn't tried again.
         return endWith(entry, {
@@ -463,31 +529,18 @@ export function createWorker({
           error: "停止信号发出后没能确认进程组已结束：这一轮按没跑成记，不再重试，进程可能还在。",
         });
       }
-      return conclude(entry, adapter, exitCode());
+      return await conclude(entry, adapter, exitCode());
     }
-    if (existsSync(exit)) return conclude(entry, adapter, exitCode());
+    if (existsSync(exit)) return await conclude(entry, adapter, exitCode());
     // The shell can publish its exit between the first file check and ps returning.
     const looking = await alive(entry);
-    if (looking === false) return conclude(entry, adapter, exitCode());
+    if (looking === false) return await conclude(entry, adapter, exitCode());
     // Unable to look, the run counts as still going, so its timeout and its finished turn still end it.
     if (looking === null && !blind) log(`couldn't inspect processes; runs count as going until they end or time out`);
     blind = looking === null;
     const seen = read(entry, adapter, null);
     // Kept as soon as it's read: if the end can't be read, the one made up at launch may be nothing its CLI knows of.
-    if (seen.session && seen.session !== entry.session) {
-      entry.session = seen.session;
-      save(entry);
-    }
-    const session = seen.session ?? (adapter.link ? entry.session : undefined);
-    if (session && session !== entry.told) {
-      try {
-        await hub.started(entry.run, entry.token, { session, ...(adapter.link && { link: adapter.link(session) }) });
-        entry.told = session;
-        save(entry);
-      } catch (error) {
-        log(`run ${entry.run}: couldn't say it started: ${error}`);
-      }
-    }
+    await reportStarted(entry, adapter, seen, seen.progress !== undefined ? 2 : 30);
     const moment = now();
     const limit = (entry.job.agent.timeout ?? TIMEOUT_MINUTES) * 60_000;
     if (moment - (entry.launchedAt ?? moment) > limit) return stop(entry, "timeout");
@@ -572,19 +625,51 @@ export function createWorker({
     const held = entries();
     let reachable = true;
     try {
+      const requestedPaths = { ...workspacePaths };
       const answer = await hub.work({
         claim,
         wait: held.length ? 1 : wait,
         running: held.map((entry) => entry.run),
         capacity: held.length < capacity,
+        negotiate: true,
+        ...(workspaceValues && { workspaces: workspaceValues }),
       });
+      if (Array.isArray(answer?.workspaces)) {
+        const candidates: string[] = answer.workspaces.filter((cwd: unknown): cwd is string => typeof cwd === "string");
+        workspacePaths = {};
+        workspaceMap = Object.fromEntries(
+          candidates.map((given) => {
+            const expanded = given.replace(/^~(?=[/\\])/, homedir());
+            const absolute = path.resolve(expanded);
+            let identity = absolute;
+            try {
+              identity = realpathSync(absolute);
+            } catch {}
+            if (process.platform === "win32") identity = identity.toLowerCase();
+            let identityKey = identity;
+            try {
+              const stat = statSync(identity, { bigint: true });
+              identityKey = `${stat.dev}:${stat.ino}`;
+            } catch {}
+            const key = createHash("sha256").update(identityKey).digest("hex");
+            workspacePaths[given] = identity;
+            return [given, key];
+          }),
+        );
+        workspaceValues = candidates.map((given) => {
+          const rawKey = createHash("sha256").update(given).digest("hex");
+          return `${rawKey}:${workspaceMap![given]}`;
+        });
+      }
       for (const id of answer?.cancel ?? []) {
         const entry = held.find((entry) => entry.run === id);
         if (entry) stop(entry, "cancel");
       }
       if (answer?.job) {
         claim = randomUUID();
-        await start(answer.job);
+        const original = answer.job.rule.cwd;
+        const canonical = requestedPaths[original];
+        await start(canonical ? { ...answer.job, rule: { ...answer.job.rule, cwd: canonical } } : answer.job);
       }
     } catch (error) {
       log(`couldn't reach the hub: ${error}`);

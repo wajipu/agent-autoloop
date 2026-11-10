@@ -11,7 +11,7 @@ import { cronOf, eventRule, SCHEDULE, type Rules } from "../kernel/rules.ts";
 const VIEWS = {
   events: "id source key type subject summary detail link routed paused received_at",
   runs:
-    "id rule agent grp lane state attempts not_before claim last_result cancel_at resume session link created_at " +
+    "id rule agent grp lane state attempts not_before claim last_result cancel_at resume session link progress created_at " +
     "claimed_at seen_at finished_at manual summary error usage",
   run_events: "run_id event_id",
   cards:
@@ -36,10 +36,20 @@ const ONLINE = 120_000 + SEEN_EVERY;
 const PAGE = 60;
 const WEEK = 7 * 86400_000;
 
-export type Spending = { rounds: number; tokens: number; cost: number; missingTokens: number; missingCost: number };
+export type Spending = {
+  rounds: number;
+  tokens: number;
+  cost: number;
+  estimatedCost: number;
+  missingTokens: number;
+  missingCost: number;
+  missingEstimatedCost: number;
+};
 const SPENDING = `SELECT COUNT(*) AS rounds,
   COALESCE(SUM(COALESCE(json_extract(usage, '$.input'), 0) + COALESCE(json_extract(usage, '$.output'), 0)), 0) AS tokens,
   COALESCE(SUM(json_extract(usage, '$.cost')), 0) AS cost,
+  COALESCE(SUM(COALESCE(json_extract(usage, '$.estimatedCost'), json_extract(usage, '$.cost'))), 0) AS estimatedCost,
+  COUNT(*) - COUNT(COALESCE(json_extract(usage, '$.estimatedCost'), json_extract(usage, '$.cost'))) AS missingEstimatedCost,
   COUNT(*) - COUNT(COALESCE(json_extract(usage, '$.input'), json_extract(usage, '$.output'))) AS missingTokens,
   COUNT(*) - COUNT(json_extract(usage, '$.cost')) AS missingCost
   FROM runs WHERE finished_at >= ? AND (claimed_at IS NOT NULL OR usage IS NOT NULL)`;
@@ -179,6 +189,7 @@ export function stateOf(now: number, before: number | undefined, rules: Rules, {
       error: run.error ?? "",
       link: run.link ?? "",
       session: run.session,
+      progress: run.progress ? JSON.parse(run.progress) : null,
       usage: run.usage ? JSON.parse(run.usage) : null,
       stopping: run.cancel_at !== null,
       manual: Boolean(run.manual),

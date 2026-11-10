@@ -5,21 +5,100 @@ import Charts
 struct StatisticsView: View {
     let state: HubState?
     var runs: [HubRun] = []
+    @State private var latestState: HubState?
+    @State private var refreshError: String?
+    @State private var refreshing = false
+    @StateObject private var settings = AppSettings.shared
+
+    private var displayedState: HubState? { latestState ?? state }
 
     var body: some View {
         List {
-            if let state {
+            if !settings.hubConfigured {
+                ContentUnavailableView("还没配中台", systemImage: "antenna.radiowaves.left.and.right",
+                                       description: Text("去「设置」填中台地址和本人密钥"))
+            } else if let state = displayedState {
+                if let refreshError {
+                    Section {
+                        Label(refreshError, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                currentRuns(state)
                 flow(state)
                 activity(state)
                 composition(state)
                 cost(state)
             } else {
-                Text("还没有数据").foregroundStyle(.secondary)
+                if let refreshError {
+                    ContentUnavailableView("读不到中台状态", systemImage: "wifi.exclamationmark", description: Text(refreshError))
+                } else {
+                    ProgressView("读取中…")
+                }
             }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("统计")
         .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await refresh() }
+        .task {
+            await refresh()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { break }
+                await refresh()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func currentRuns(_ state: HubState) -> some View {
+        let active = state.runs.filter { ["claimed", "unknown", "queued"].contains($0.state) }
+        if active.isEmpty {
+            Section("当前轮次") {
+                Text("没有正在执行或排队的轮次").font(.subheadline).foregroundStyle(.secondary)
+            }
+        } else {
+            if active.contains(where: { $0.state == "claimed" }) {
+                Section("在跑 · \(active.filter { $0.state == "claimed" }.count)") {
+                    ForEach(active.filter { $0.state == "claimed" }) { run in
+                        NavigationLink { RunDetailView(run: run) } label: { RunRowView(run: run) }
+                    }
+                }
+            }
+            if active.contains(where: { $0.state == "unknown" }) {
+                Section("状态未知 · \(active.filter { $0.state == "unknown" }.count)") {
+                    ForEach(active.filter { $0.state == "unknown" }) { run in
+                        NavigationLink { RunDetailView(run: run) } label: { RunRowView(run: run) }
+                    }
+                }
+            }
+            if active.contains(where: { $0.state == "queued" }) {
+                Section("排队 · \(active.filter { $0.state == "queued" }.count)") {
+                    ForEach(active.filter { $0.state == "queued" }) { run in
+                        NavigationLink { RunDetailView(run: run) } label: { RunRowView(run: run) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func refresh() async {
+        guard settings.hubConfigured else {
+            refreshError = "去「设置」填中台地址和本人密钥"
+            return
+        }
+        guard !refreshing else { return }
+        refreshing = true
+        defer { refreshing = false }
+        do {
+            latestState = try await HubClient(baseURL: settings.hubURL, key: settings.hubKey).state()
+            refreshError = nil
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+            refreshError = error.localizedDescription
+        }
     }
 
     // MARK: 流程
@@ -144,35 +223,28 @@ struct StatisticsView: View {
     @ViewBuilder
     private func cost(_ state: HubState) -> some View {
         if let spending = state.spending {
-            let today = spending.today?.cost ?? 0
-            let week = spending.week?.cost ?? 0
-            let bars = [
-                Slice(label: "今日", count: Int(today * 100), color: Color.accentColor),
-                Slice(label: "近 7 天", count: Int(week * 100), color: Color.accentColor.opacity(0.5)),
-            ]
             Section {
-                Chart(bars) { bar in
-                    BarMark(x: .value("区间", bar.label), y: .value("分", bar.count))
-                        .foregroundStyle(bar.color.gradient)
-                        .cornerRadius(4)
-                        .annotation(position: .top) {
-                            Text(money(Double(bar.count) / 100))
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.secondary)
+                ForEach([("今日", spending.today), ("近 7 天", spending.week)], id: \.0) { title, amount in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(title)
+                            Spacer()
+                            Text(amount?.estimateText ?? "未估算")
+                                .fontWeight(.semibold)
+                                .monospacedDigit()
                         }
+                        Text(amount?.estimateCoverage ?? "估算情况未知")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
                 }
-                .chartYAxis(.hidden)
-                .frame(height: 120)
             } header: {
-                Text("花费")
+                Text("参考费用（估算）")
             } footer: {
-                Text("今天 \(money(today))，近 7 天 \(money(week))。没有报用量的轮次不计入。")
+                Text("Codex 按官方 Standard API 单价估算，分别计算普通输入、缓存读取、30 分钟缓存写入及输出；超过 272K 的请求按长上下文价计算。不含工具调用费用、加速及地域附加费。已有程序上报金额作为参考费用保留；不是实际账单。")
             }
         }
-    }
-
-    private func money(_ value: Double) -> String {
-        value >= 100 ? String(format: "$%.0f", value) : String(format: "$%.2f", value)
     }
 
     private static let hourFormatter: DateFormatter = {

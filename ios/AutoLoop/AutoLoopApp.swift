@@ -5,6 +5,7 @@ import ObjectiveC
 final class DeepLink: ObservableObject {
     static let shared = DeepLink()
     @Published var cardID: Int?
+    @Published var run: HubRun?
 }
 
 /// 长按 App 图标选「新建工作项」时接住这个动作。
@@ -90,6 +91,11 @@ struct RootView: View {
     @StateObject private var createRequest = CreateRequest.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = ProcessInfo.processInfo.environment["OPEN_TAB"] ?? "home"
+    @State private var observedRunStates: [Int: String] = [:]
+    @State private var hasCompletionBaseline = false
+    @State private var completionCheckAt: Date?
+    @State private var completionConnection: String?
+    @State private var completedRuns: [HubRun] = []
 
     var body: some View {
         TabView(selection: $tab) {
@@ -105,6 +111,94 @@ struct RootView: View {
             SettingsView()
                 .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
                 .tag("settings")
+        }
+        .overlay(alignment: .top) {
+            if let run = completedRuns.first {
+                HStack(spacing: 12) {
+                    Button {
+                        tab = "home"
+                        DeepLink.shared.run = run
+                        completedRuns.removeFirst()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("任务已完成 · #\(run.id)")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(run.rule)
+                                    .font(.caption)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 4)
+                            Text("查看结果")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.tint)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        completedRuns.removeFirst()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 32, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭完成提示")
+                }
+                .padding(.leading, 16)
+                .padding(.trailing, 6)
+                .padding(.vertical, 10)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .task(id: run.id) {
+                    do {
+                        try await Task.sleep(for: .seconds(8))
+                        if completedRuns.first?.id == run.id { completedRuns.removeFirst() }
+                    } catch { }
+                }
+            }
+        }
+        .task(id: "\(scenePhase == .active)|\(settings.hubURL)|\(settings.hubKey)") {
+            let connection = "\(settings.hubURL)|\(settings.hubKey)"
+            if completionConnection != connection {
+                // A fresh connection establishes a baseline instead of replaying old completions.
+                completionConnection = connection
+                observedRunStates = [:]
+                hasCompletionBaseline = false
+                completionCheckAt = nil
+                completedRuns = []
+            }
+            guard scenePhase == .active, settings.hubConfigured else { return }
+            let client = HubClient(baseURL: settings.hubURL, key: settings.hubKey)
+            while !Task.isCancelled {
+                do {
+                    let state = try await client.state()
+                    try Task.checkCancellation()
+                    if hasCompletionBaseline {
+                        for run in state.runs.sorted(by: { $0.id < $1.id }) {
+                            let previous = observedRunStates[run.id]
+                            let wasActive = previous.map { ["claimed", "queued", "unknown"].contains($0) } ?? false
+                            let finishedSinceCheck = previous == nil && completionCheckAt.map { checkpoint in
+                                run.finished.map { $0 > checkpoint } ?? false
+                            } == true
+                            if ["done", "nothing"].contains(run.state), wasActive || finishedSinceCheck {
+                                completedRuns.append(run)
+                            }
+                        }
+                    }
+                    observedRunStates = Dictionary(uniqueKeysWithValues: state.runs.map { ($0.id, $0.state) })
+                    completionCheckAt = HubRun.date(state.now)
+                    hasCompletionBaseline = true
+                } catch { }
+                do { try await Task.sleep(for: .seconds(5)) }
+                catch { return }
+            }
         }
         .onChange(of: tab) { oldValue, newValue in
             // 「新建」是动作不是页面：弹出表单后立刻回到原来的页签。

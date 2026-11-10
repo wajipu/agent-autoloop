@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
 import { readMessage, receiptBlock } from "../../worker/contract.ts";
+import { parseProgress, type ProgressStep } from "../../protocol/validate.ts";
 
 const PERMISSIONS = { read: "plan", edit: "acceptEdits", full: "bypassPermissions" };
 
@@ -23,6 +24,87 @@ export function inTheApp() {
     const builds = folders(path.join(root, version));
     return builds.map((build) => path.join(root, version, build, "claude.app/Contents/MacOS/claude"));
   });
+}
+
+function progressOf(messages: any[]): ProgressStep[] | undefined {
+  const tasks = new Map<string, { title: string; activeForm?: string; status: string }>();
+  const creates = new Map<string, { title: string; activeForm?: string }>();
+  let found = false;
+  for (const message of messages) {
+    const blocks = message?.message?.content;
+    if (!Array.isArray(blocks)) continue;
+    if (message.type === "assistant") {
+      for (const block of blocks) {
+        const input = block?.input;
+        if (block?.type !== "tool_use" || !input || typeof input !== "object") continue;
+        if (block.name === "TodoWrite" && Array.isArray(input.todos)) {
+          found = true;
+          tasks.clear();
+          if (
+            input.todos.some(
+              (todo: any) =>
+                !todo ||
+                typeof todo.content !== "string" ||
+                !["pending", "in_progress", "completed"].includes(todo.status) ||
+                (todo.activeForm !== undefined && typeof todo.activeForm !== "string"),
+            )
+          ) {
+            tasks.set("", { title: "", status: "invalid" });
+            continue;
+          }
+          for (const [index, todo] of input.todos.entries()) {
+            tasks.set(`claude-${index}`, {
+              title: todo.content,
+              activeForm: todo.activeForm,
+              status: todo.status,
+            });
+          }
+        }
+        if (block.name === "TaskCreate" && typeof input.subject === "string") {
+          creates.set(String(block.id), {
+            title: input.subject,
+            activeForm: input.activeForm ?? input.active_form,
+          });
+        } else if (block.name === "TaskUpdate") {
+          const id = input.taskId ?? input.id ?? input.task_id;
+          if (typeof id !== "string") continue;
+          found = true;
+          if (input.status === "deleted") tasks.delete(id);
+          else {
+            const task = tasks.get(id);
+            if (task) {
+              if (["pending", "in_progress", "completed"].includes(input.status)) task.status = input.status;
+              if (typeof input.subject === "string") task.title = input.subject;
+              const activeForm = input.activeForm ?? input.active_form;
+              if (typeof activeForm === "string") task.activeForm = activeForm;
+            }
+          }
+        }
+      }
+    } else if (message.type === "user") {
+      for (const block of blocks) {
+        if (block?.type !== "tool_result") continue;
+        const create = creates.get(block.tool_use_id);
+        if (!create) continue;
+        creates.delete(block.tool_use_id);
+        if (block.is_error || typeof message.tool_use_result?.task?.id !== "string") continue;
+        found = true;
+        tasks.set(message.tool_use_result.task.id, { ...create, status: "pending" });
+      }
+    }
+  }
+  if (!found) return undefined;
+  try {
+    return parseProgress(
+      [...tasks].map(([id, task]) => ({
+        id,
+        title: task.status === "in_progress" ? task.activeForm || task.title : task.title,
+        status: task.status === "in_progress" ? "running" : task.status,
+      })),
+    );
+  } catch {
+    return [];
+  }
 }
 
 export default {
@@ -45,6 +127,7 @@ export default {
     // finds it, but the desktop app, opening the session link from the run's folder, showed only its first message.
     "--disallowedTools=EnterWorktree,ExitWorktree",
   ],
+  environment: () => ({ CLAUDE_CODE_ENABLE_TODO_TOOLS: "1" }),
   read(stdout, code, stderr) {
     const messages = stdout.split("\n").flatMap((line) => {
       try {
@@ -55,10 +138,15 @@ export default {
       }
     });
     const result = messages.findLast((message) => message?.type === "result");
+    const progress = progressOf(messages);
     const session = messages.findLast((message) => message?.session_id)?.session_id;
     const started =
       result?.num_turns > 0 || messages.some((message) => message?.type === "assistant" || message?.subtype === "init");
-    const known = { ...(session && { session }), ...(started && { started }) };
+    const known = {
+      ...(session && { session }),
+      ...(started && { started }),
+      ...(progress !== undefined && { progress }),
+    };
     // Each turn ends in a result, and a background task brings it back for another when it ends. Only one that's left
     // nothing to come back for is its answer, unless it has exited by itself: then it was its last word.
     const later = messages.slice(messages.lastIndexOf(result) + 1);
