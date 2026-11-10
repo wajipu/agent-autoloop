@@ -64,6 +64,8 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 `access` 默认 `edit`，专用插件翻译成对应 CLI 的权限；`command` 只传参数，不替任意程序限制权限，按该 CLI 文档配置。要完整权限、不审批的话写 `full`，先和用户说清楚。
 
+要换模型或推理深度，在同一个 Agent 里加 `model`、`effort`：Claude 可以写它认的别名（`opus`、`sonnet`）或全名，Codex 写它 `config.toml` 里 `model` 那行的名字；`effort` 是推理深度（`low`、`medium`、`high`、`xhigh`）。不写就跟随 CLI 自己的配置，这是最稳的。写错时每一轮都会跑不起来，报错来自 CLI，不会指向模型名。ACP 和 DSH 的 `model`、`effort` 不生效，要在它们自己那边设。要固定走某个网关或模型，优先写进包装脚本（下面 `program` 那段），别把模型散在规则里。
+
 内置的 Claude Code、Codex、DeepSeek Harness 要走第三方网关、代理，或者启动前要先设好环境变量：写一个小脚本，设好变量再 `exec claude "$@"`（Codex、DSH 照此换成 `codex`、`dsh`），Agent 里写 `"program": "脚本的绝对路径"`。插件照旧解析输出、续接会话、统计用量，只是启动的是这个脚本；不用改成 `use: "command"`。令牌放在脚本读的文件里，不写进 `rules.json`。接单程序启动 Agent 前会去掉继承来的 `CLAUDE_CODE_*` 变量，要用的写在脚本里。`agent-autoloop doctor` 也用这个脚本检查登录。脚本能读到 `AGENT_AUTOLOOP_RUN`（第几轮）和 `AGENT_AUTOLOOP_CONTEXT`（资料文件），比如按轮次准备工作目录再 `cd` 进去。
 
 ```json

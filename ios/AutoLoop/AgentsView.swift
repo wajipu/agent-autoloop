@@ -163,55 +163,29 @@ struct AgentEditView: View {
     @State private var plugin: String
     @State private var worker: String
     @State private var access: String
-    @State private var modelMode: String
-    @State private var modelText: String
-    @State private var effort: String
     @State private var command: String
     @Environment(\.dismiss) private var dismiss
 
     /// 内置的几种；其余插件用「其他」填标识。
     private static let presets = ["claude", "codex", "acp", "command"]
 
-    /// 这些是 CLI 自己认的别名，换版本也不会失效；全名和第三方模型走「自定义」。
-    private static func modelAliases(_ use: String) -> [String] {
-        switch use {
-        case "claude": return ["opus", "sonnet", "haiku", "fable"]
-        default: return []
-        }
-    }
-
-    private let efforts = ["", "low", "medium", "high", "xhigh"]
-
     init(item: AgentItem?, workers: [String], onSave: @escaping (String, [String: Any]) -> Void) {
         original = item
         self.workers = workers
         self.onSave = onSave
         let use = item?.use ?? "claude"
-        let preset = Self.presets.contains(use) ? use : "other"
-        let model = item?.model ?? ""
         _id = State(initialValue: item?.id ?? "")
         _name = State(initialValue: item?.name ?? "")
-        _preset = State(initialValue: preset)
+        _preset = State(initialValue: Self.presets.contains(use) ? use : "other")
         _plugin = State(initialValue: Self.presets.contains(use) ? "" : use)
         _worker = State(initialValue: item?.worker ?? workers.first ?? "wajipu-mac")
         _access = State(initialValue: (item?.raw["access"] as? String) ?? "edit")
-        _modelMode = State(initialValue: model.isEmpty
-            ? ""
-            : (Self.modelAliases(preset).contains(model) ? model : "custom"))
-        _modelText = State(initialValue: Self.modelAliases(preset).contains(model) ? "" : model)
-        _effort = State(initialValue: item?.effort ?? "")
         _command = State(initialValue: (item?.command ?? []).joined(separator: "\n"))
     }
 
     /// 真正写进配置的类型：预设就是它本身，其他插件是填的标识。
     private var use: String {
         preset == "other" ? plugin.trimmingCharacters(in: .whitespaces) : preset
-    }
-
-    /// 要写进配置的模型：空就是跟随 CLI 自己的配置。
-    private var model: String {
-        let value = modelMode == "custom" ? modelText : modelMode
-        return value.trimmingCharacters(in: .whitespaces)
     }
 
     /// 要不要写启动命令：命令行和 ACP 必须有，其他插件可选。
@@ -279,31 +253,18 @@ struct AgentEditView: View {
 
             if takesModel {
                 Section {
-                    Picker("模型", selection: $modelMode) {
-                        Text("跟随 CLI 默认").tag("")
-                        ForEach(Self.modelAliases(preset), id: \.self) { alias in
-                            Text(alias).tag(alias)
-                        }
-                        Text("自定义…").tag("custom")
+                    LabeledContent("模型") {
+                        Text(original?.model.isEmpty == false ? original!.model : "跟随 CLI 默认")
+                            .font(.footnote.monospaced())
+                            .foregroundStyle(.secondary)
                     }
-                    if modelMode == "custom" {
-                        LabeledContent("模型名") {
-                            TextField(modelPlaceholder, text: $modelText)
-                                .multilineTextAlignment(.trailing)
-                                .font(.footnote.monospaced())
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                        }
-                    }
-                    Picker("思考强度", selection: $effort) {
-                        ForEach(efforts, id: \.self) { value in
-                            Text(value.isEmpty ? "默认" : value).tag(value)
-                        }
+                    if let effort = original?.effort, !effort.isEmpty {
+                        LabeledContent("思考强度") { Text(effort).font(.footnote.monospaced()) }
                     }
                 } header: {
                     Text("模型")
                 } footer: {
-                    Text(modelFooter)
+                    Text("模型和思考强度写在规则配置里，按 Agent 手册改：Claude、Codex 可以用 model、effort，ACP 和 DSH 由它们自己决定，最稳的是不写、跟随 CLI 默认。")
                 }
             }
 
@@ -325,12 +286,6 @@ struct AgentEditView: View {
         }
         .navigationTitle(original == nil ? "新增 Agent" : "编辑 Agent")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: preset) { _, newValue in
-            // 换了类型，原来选的别名可能这个 CLI 不认，退回默认。
-            if modelMode != "", modelMode != "custom", !Self.modelAliases(newValue).contains(modelMode) {
-                modelMode = ""
-            }
-        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("取消") { dismiss() }
@@ -351,32 +306,11 @@ struct AgentEditView: View {
         return list.isEmpty ? ["wajipu-mac"] : list
     }
 
-    private var modelPlaceholder: String {
-        switch preset {
-        case "claude": return "如 opus、claude-sonnet-4-5"
-        case "codex": return "如你 codex 配置里的 model"
-        case "command": return "留给 {model}"
-        default: return "如插件文档里的名字"
-        }
-    }
-
-    private var modelFooter: String {
-        switch preset {
-        case "command":
-            return "命令行里用 {model}、{effort} 取到这两个值；命令里没写占位就不起作用。"
-        case "codex":
-            return "Codex 没有通用别名：要么跟随它自己配置的模型，要么填它配置里 model 那行的名字。填错会让每一轮都跑不起来，错误会留在首页那一轮里。"
-        default:
-            return "跟随 CLI 默认最稳；别名会指向它当前的最新模型。填错会让每一轮都跑不起来，错误会留在首页那一轮里。"
-        }
-    }
-
     private var valid: Bool {
         guard !id.trimmingCharacters(in: .whitespaces).isEmpty,
               !name.trimmingCharacters(in: .whitespaces).isEmpty,
               !worker.isEmpty else { return false }
         if preset == "other", plugin.trimmingCharacters(in: .whitespaces).isEmpty { return false }
-        if modelMode == "custom", model.isEmpty { return false }
         if needsCommand {
             return !command.split(separator: "\n").isEmpty
         }
@@ -399,13 +333,9 @@ struct AgentEditView: View {
         if preset != "command" {
             raw["access"] = access
         }
-        if takesModel {
-            if !model.isEmpty { raw["model"] = model }
-            if !effort.isEmpty { raw["effort"] = effort }
-        }
-        // 保留原有其他字段（比如 timeout、program）
+        // 模型、思考强度、超时这些不在手机上改，原样留着。
         if var old = original?.raw {
-            for key in ["name", "worker", "use", "access", "command", "model", "effort"] { old.removeValue(forKey: key) }
+            for key in ["name", "worker", "use", "access", "command"] { old.removeValue(forKey: key) }
             raw.merge(old) { current, _ in current }
         }
         onSave(id.trimmingCharacters(in: .whitespaces), raw)
