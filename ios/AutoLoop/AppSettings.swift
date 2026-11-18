@@ -2,31 +2,31 @@ import Foundation
 import Security
 import SwiftUI
 
-/// 令牌放钥匙串，企业/项目/类型放 UserDefaults。首次启动用 KoKLam 的默认值。
+/// 令牌放钥匙串，owner/repo 放 UserDefaults。首次启动用 KoKLam 的默认值。
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
     @Published var token: String {
         didSet {
-            Keychain.set(token, for: "yunxiao.token")
+            Keychain.set(token, for: "github.token")
             SharedConfig.token = token
         }
     }
-    @Published var orgId: String {
+    @Published var owner: String {
         didSet {
-            UserDefaults.standard.set(orgId, forKey: "yunxiao.org")
-            SharedConfig.orgId = orgId
+            UserDefaults.standard.set(owner, forKey: "github.owner")
+            SharedConfig.owner = owner
         }
     }
-    @Published var projectId: String {
+    @Published var repo: String {
         didSet {
-            UserDefaults.standard.set(projectId, forKey: "yunxiao.project")
-            SharedConfig.projectId = projectId
+            UserDefaults.standard.set(repo, forKey: "github.repo")
+            SharedConfig.repo = repo
         }
     }
     @Published var defaultCategory: IssueCategory {
         didSet {
-            UserDefaults.standard.set(defaultCategory.rawValue, forKey: "yunxiao.category")
+            UserDefaults.standard.set(defaultCategory.rawValue, forKey: "github.category")
             NotificationCenter.default.post(name: .issueCategoryChanged, object: nil)
         }
     }
@@ -42,12 +42,12 @@ final class AppSettings: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        let stored = Keychain.get("yunxiao.token") ?? ""
-        let fromEnv = ProcessInfo.processInfo.environment["YUNXIAO_TOKEN"] ?? ""
+        let stored = Keychain.get("github.token") ?? ""
+        let fromEnv = ProcessInfo.processInfo.environment["GITHUB_TOKEN"] ?? ""
         token = stored.isEmpty ? fromEnv : stored
-        orgId = defaults.string(forKey: "yunxiao.org") ?? "68359a6af957ee9df431ecaa"
-        projectId = defaults.string(forKey: "yunxiao.project") ?? "854d2f7e0a466c8d4e3dd69c85"
-        defaultCategory = IssueCategory(rawValue: defaults.string(forKey: "yunxiao.category") ?? "Task") ?? .task
+        owner = defaults.string(forKey: "github.owner") ?? "koklam-saas"
+        repo = defaults.string(forKey: "github.repo") ?? "koklam-plus"
+        defaultCategory = IssueCategory(rawValue: defaults.string(forKey: "github.category") ?? "Task") ?? .task
         appearance = Appearance(rawValue: defaults.string(forKey: "app.appearance") ?? "system") ?? .system
         hubURL = ProcessInfo.processInfo.environment["HUB_URL"]
             ?? defaults.string(forKey: "hub.url")
@@ -57,13 +57,13 @@ final class AppSettings: ObservableObject {
         hubKey = hubFromEnv.isEmpty ? storedHub : hubFromEnv
 
         // 启动时用环境变量注入过一次，就存进钥匙串，之后不用再带
-        if stored.isEmpty, !fromEnv.isEmpty { Keychain.set(fromEnv, for: "yunxiao.token") }
+        if stored.isEmpty, !fromEnv.isEmpty { Keychain.set(fromEnv, for: "github.token") }
         if storedHub.isEmpty, !hubFromEnv.isEmpty { Keychain.set(hubFromEnv, for: "hub.key") }
 
         // 分享扩展要用同一份配置，写进 App Group
         SharedConfig.token = token
-        SharedConfig.orgId = orgId
-        SharedConfig.projectId = projectId
+        SharedConfig.owner = owner
+        SharedConfig.repo = repo
     }
 
     var hubConfigured: Bool { !hubURL.isEmpty && !hubKey.isEmpty }
@@ -76,19 +76,12 @@ final class AppSettings: ObservableObject {
         return hubURL
     }
 
-    var enterprise: Enterprise {
-        get { Enterprise(rawValue: orgId) ?? .koklam }
-        set {
-            orgId = newValue.rawValue
-            projectId = newValue.projectId
-            defaultCategory = newValue.defaultCategory
-        }
-    }
+    var configured: Bool { !token.isEmpty && !owner.isEmpty && !repo.isEmpty }
 
-    var configured: Bool { !token.isEmpty && !orgId.isEmpty && !projectId.isEmpty }
-
-    var workitemURL: (String) -> URL? {
-        { id in URL(string: "https://devops.aliyun.com/projex/project/\(self.projectId)/workitem/\(id)") }
+    /// Issue 在 GitHub 上的网页地址（number 即 identifier）。
+    func issueURL(number: String) -> URL? {
+        guard let n = Int(number) else { return nil }
+        return URL(string: "https://github.com/\(owner)/\(repo)/issues/\(n)")
     }
 }
 

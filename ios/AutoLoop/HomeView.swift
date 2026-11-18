@@ -447,8 +447,8 @@ struct CardRow: View {
             trace = try? await CardTrace.lookup(card: card, page: { try await client.state(before: $0) },
                                                facts: { try await client.why(runID: $0) })
             if settings.configured, let serial = trace?.serial ?? card.lane, isWorkitemSerial(serial) {
-                let yunxiao = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
-                relatedItem = try? await yunxiao.findWorkitem(serialNumber: serial)
+                let github = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
+                relatedItem = try? await github.findWorkitem(serialNumber: serial)
             }
         }
     }

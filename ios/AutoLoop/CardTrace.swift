@@ -22,7 +22,7 @@ struct CardTrace {
                               row["id"] as? Int == card.id,
                               row["run_id"] as? Int == run.id else { continue }
                         let lane = row["lane"] as? String
-                        let subject = run.events?.first(where: { $0.source == "yunxiao" })?.subject
+                        let subject = run.events?.first(where: { $0.source == "github" })?.subject
                         let serial = [lane, subject].compactMap { $0 }.first(where: isSerial)
                         return CardTrace(run: run, serial: serial)
                     }

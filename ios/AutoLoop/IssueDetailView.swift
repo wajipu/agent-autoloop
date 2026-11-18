@@ -41,13 +41,13 @@ struct IssueDetailView: View {
     @State private var detail: WorkitemDetail?
     @State private var error: String?
     @State private var web: WebSheet?
-    @State private var statuses: [(id: String, name: String)] = []
+    @State private var statuses: [GitHubClient.WorkflowStatus] = []
     @State private var changingTo: String?
     @State private var flowError: String?
     @State private var handingOff = false
     @State private var handedOff = false
-    @State private var comments: [YunxiaoClient.Comment] = []
-    @State private var activities: [YunxiaoClient.Activity] = []
+    @State private var comments: [GitHubClient.Comment] = []
+    @State private var activities: [GitHubClient.Activity] = []
     @State private var children: [Workitem] = []
     @State private var showAllChildren = false
     @State private var commentDraft = ""
@@ -196,10 +196,10 @@ struct IssueDetailView: View {
                 }
             }
 
-            if let trigger = AgentTrigger.of(item.category), detail != nil {
+            if detail != nil {
                 Section {
                     Button {
-                        Task { await handOff(trigger) }
+                        Task { await handOff() }
                     } label: {
                         HStack(spacing: 8) {
                             Label("交给 Agent", systemImage: "sparkles")
@@ -211,7 +211,7 @@ struct IssueDetailView: View {
                                     .font(.footnote)
                                     .foregroundStyle(.green)
                             } else {
-                                Text(trigger.targetName)
+                                Text("打上 agent 标签")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -219,7 +219,7 @@ struct IssueDetailView: View {
                     }
                     .disabled(handingOff)
                 } footer: {
-                    Text("转到「\(trigger.targetName)」后，5 分钟内的下一轮轮询会开始处理；做完会转到「\(trigger.doneName)」。")
+                    Text("打上 agent 标签后，5 分钟内的下一轮轮询会开始处理；做完 Issue 会自动关闭。")
                 }
             }
 
@@ -292,12 +292,12 @@ struct IssueDetailView: View {
                 subItemsSection
             }
 
-            if let url = settings.workitemURL(item.id) {
+            if let url = settings.issueURL(number: item.id) {
                 Section {
                     Button {
                         web = WebSheet(url: url)
                     } label: {
-                        Label("在云效打开", systemImage: "safari")
+                        Label("在 GitHub 打开", systemImage: "safari")
                     }
                 }
             }
@@ -322,7 +322,7 @@ struct IssueDetailView: View {
 
     private func loadTalk() async {
         guard settings.configured else { return }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             comments = try await client.comments(issueID: item.identifier)
             activities = try await client.activities(issueID: item.identifier)
@@ -333,7 +333,7 @@ struct IssueDetailView: View {
 
     private func loadChildren() async {
         guard settings.configured else { return }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             // 树形搜索拿全量，筛出本单的直接子单
             let all = try await client.searchTree(category: item.category.rawValue)
@@ -345,7 +345,7 @@ struct IssueDetailView: View {
 
     private func loadStatuses() async {
         guard settings.configured else { return }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             statuses = try await client.workflowStatuses(category: item.category)
         } catch {
@@ -357,7 +357,7 @@ struct IssueDetailView: View {
         changingTo = id
         defer { changingTo = nil }
         guard settings.configured else { return }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             try await client.updateStatus(issueID: item.identifier, statusID: id)
             flowError = nil
@@ -369,33 +369,17 @@ struct IssueDetailView: View {
         }
     }
 
-    /// 一键交给 Agent：转到该大类的触发状态。
-    /// 已经在目标状态时先退回 idle 再转回来，轮询才会看到一次新的状态变化。
-    private func handOff(_ trigger: AgentTrigger) async {
-        guard settings.configured else { return }
+    /// 一键交给 Agent：打上 agent 标签，轮询只认打了这个标签的 Issue。
+    private func handOff() async {
+        guard settings.configured, let number = Int(item.identifier) else { return }
         handingOff = true
         handedOff = false
         defer { handingOff = false }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
-            if statuses.isEmpty {
-                statuses = try await client.workflowStatuses(category: item.category)
-            }
-            guard let target = statuses.first(where: { $0.name == trigger.targetName }) else {
-                flowError = "这个工作流里没有「\(trigger.targetName)」状态"
-                return
-            }
-            let currentID = detail?.status?.id ?? item.status?.id
-            if currentID == target.id,
-               let idleName = trigger.idleName,
-               let idle = statuses.first(where: { $0.name == idleName }) {
-                try await client.updateStatus(issueID: item.identifier, statusID: idle.id)
-            }
-            try await client.updateStatus(issueID: item.identifier, statusID: target.id)
+            try await client.addLabel(number: number, label: "agent")
             flowError = nil
             handedOff = true
-            await load()
-            NotificationCenter.default.post(name: .issuesShouldReload, object: nil)
         } catch {
             flowError = error.localizedDescription
         }
@@ -440,7 +424,7 @@ struct IssueDetailView: View {
         guard !content.isEmpty, settings.configured else { return }
         postingComment = true
         defer { postingComment = false }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             try await client.addComment(issueID: item.identifier, content: content)
             commentDraft = ""
@@ -455,7 +439,7 @@ struct IssueDetailView: View {
             error = "还没填云效令牌"
             return
         }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             let loaded = try await client.detail(serialNumber: item.serialNumber)
             detail = loaded

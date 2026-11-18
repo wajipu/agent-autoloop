@@ -76,6 +76,11 @@ struct RichText: Decodable {
                    options: [.regularExpression, .caseInsensitive]) != nil
     }
 
+    /// 纯文本直接包成富文本模型（GitHub 正文是 Markdown，按纯文本走 Markdown 渲染）。
+    init(plain: String) {
+        html = plain
+    }
+
     private static func unwrap(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("{"), let data = trimmed.data(using: .utf8),

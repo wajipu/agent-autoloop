@@ -5,7 +5,7 @@ struct SettingsView: View {
     @State private var path = NavigationPath()
 
     enum Route: Hashable {
-        case hub, yunxiao, rules, agents
+        case hub, github, rules, agents
     }
 
     var body: some View {
@@ -21,12 +21,12 @@ struct SettingsView: View {
                         }
                     }
 
-                    NavigationLink(value: Route.yunxiao) {
+                    NavigationLink(value: Route.github) {
                         LabeledContent {
-                            Text(settings.enterprise.name)
-                                .foregroundStyle(.secondary)
+                            Text(settings.configured ? "已配置" : "未配置")
+                                .foregroundStyle(settings.configured ? .green : .secondary)
                         } label: {
-                            Label("云效", systemImage: "square.stack.3d.up")
+                            Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
                         }
                     }
                 }
@@ -50,16 +50,16 @@ struct SettingsView: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .hub: HubSettingsView()
-                case .yunxiao: YunxiaoSettingsView()
+                case .github: GitHubSettingsView()
                 case .rules: RulesView()
                 case .agents: AgentsView()
                 }
             }
             .onAppear {
-                // 截图/调试用：OPEN_SETTINGS_PAGE=hub|yunxiao 直接打开对应页
+                // 截图/调试用：OPEN_SETTINGS_PAGE=hub|github 直接打开对应页
                 switch ProcessInfo.processInfo.environment["OPEN_SETTINGS_PAGE"] {
                 case "hub": path.append(Route.hub)
-                case "yunxiao": path.append(Route.yunxiao)
+                case "github": path.append(Route.github)
                 case "rules":
                     path.append(Route.hub)
                     path.append(Route.rules)
@@ -169,92 +169,53 @@ struct HubSettingsView: View {
     }
 }
 
-// MARK: - 云效
+// MARK: - GitHub
 
-struct YunxiaoSettingsView: View {
+struct GitHubSettingsView: View {
     @StateObject private var settings = AppSettings.shared
-    @State private var showAdvanced = false
 
     var body: some View {
         Form {
             Section {
-                Picker("企业", selection: Binding(
-                    get: { settings.enterprise },
-                    set: { settings.enterprise = $0 }
-                )) {
-                    ForEach(Enterprise.allCases) { Text($0.name).tag($0) }
-                }
+                TextField("koklam-saas", text: $settings.owner)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.body.monospaced())
+            } header: {
+                Text("组织 / 用户")
             } footer: {
-                Text("两家企业各用各的令牌，切换后回「工作项」下拉刷新。")
+                Text("Issue 建在这个账号下的仓库里，比如 koklam-saas。")
             }
 
             Section {
-                SecureField("pt-...", text: $settings.token)
+                TextField("koklam-plus", text: $settings.repo)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.body.monospaced())
+            } header: {
+                Text("默认仓库")
+            } footer: {
+                Text("新建 Issue 的目标仓库，换仓库时才需要改。")
+            }
+
+            Section {
+                Picker("默认标签", selection: $settings.defaultCategory) {
+                    ForEach(IssueCategory.allCases) { Text($0.label).tag($0) }
+                }
+            }
+
+            Section {
+                SecureField("ghp_… / github_pat_…", text: $settings.token)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.body.monospaced())
             } header: {
                 Text("令牌")
             } footer: {
-                Text("云效个人访问令牌，存在本机钥匙串里。")
-            }
-
-            Section {
-                Picker("默认类型", selection: $settings.defaultCategory) {
-                    ForEach(IssueCategory.allCases) { Text($0.label).tag($0) }
-                }
-            }
-
-            Section {
-                DisclosureGroup("高级", isExpanded: $showAdvanced) {
-                    LabeledContent("企业 id") {
-                        Text(settings.orgId)
-                            .font(.footnote.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    LabeledContent("项目 id") {
-                        Text(settings.projectId)
-                            .font(.footnote.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-            } footer: {
-                Text("一般不用改；换项目时才需要手动填。")
+                Text("GitHub 个人访问令牌（需要 repo 权限），存在本机钥匙串里。")
             }
         }
-        .navigationTitle("云效")
+        .navigationTitle("GitHub")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// MARK: - 企业
-
-enum Enterprise: String, CaseIterable, Identifiable {
-    case koklam = "68359a6af957ee9df431ecaa"
-    case zhongliu = "63043643cb9d006848793bd7"
-
-    var id: String { rawValue }
-
-    var name: String {
-        switch self {
-        case .koklam: "KoKLam"
-        case .zhongliu: "众流"
-        }
-    }
-
-    var projectId: String {
-        switch self {
-        case .koklam: "854d2f7e0a466c8d4e3dd69c85"
-        case .zhongliu: "f21386955bbb352a491b704af2"
-        }
-    }
-
-    var defaultCategory: IssueCategory {
-        switch self {
-        case .koklam: .task
-        case .zhongliu: .bug
-        }
     }
 }

@@ -23,6 +23,8 @@ enum IssueCategory: String, CaseIterable, Identifiable {
         case .risk: "风险"
         }
     }
+    /// GitHub 仓库里用的标签名（不存在会在建单时自动创建）。
+    var githubLabel: String { label }
 }
 
 /// 主 App 写、分享扩展读的配置（App Group 里），避免扩展拿不到钥匙串。
@@ -32,16 +34,16 @@ enum SharedConfig {
     static var defaults: UserDefaults { UserDefaults(suiteName: suite) ?? .standard }
 
     static var token: String {
-        get { defaults.string(forKey: "yunxiao.token") ?? "" }
-        set { defaults.set(newValue, forKey: "yunxiao.token") }
+        get { defaults.string(forKey: "github.token") ?? "" }
+        set { defaults.set(newValue, forKey: "github.token") }
     }
-    static var orgId: String {
-        get { defaults.string(forKey: "yunxiao.org") ?? "" }
-        set { defaults.set(newValue, forKey: "yunxiao.org") }
+    static var owner: String {
+        get { defaults.string(forKey: "github.owner") ?? "" }
+        set { defaults.set(newValue, forKey: "github.owner") }
     }
-    static var projectId: String {
-        get { defaults.string(forKey: "yunxiao.project") ?? "" }
-        set { defaults.set(newValue, forKey: "yunxiao.project") }
+    static var repo: String {
+        get { defaults.string(forKey: "github.repo") ?? "" }
+        set { defaults.set(newValue, forKey: "github.repo") }
     }
-    static var configured: Bool { !token.isEmpty && !orgId.isEmpty && !projectId.isEmpty }
+    static var configured: Bool { !token.isEmpty && !owner.isEmpty && !repo.isEmpty }
 }

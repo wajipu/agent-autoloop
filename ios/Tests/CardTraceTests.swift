@@ -5,7 +5,7 @@ import Foundation
 struct CardTraceTests {
     static func main() async throws {
         let card = try JSONDecoder().decode(HubCard.self, from: Data("""
-        {"id":25,"kind":"ask","title":"需要决定","rule":"处理云效工作项","createdAt":"2026-11-09T09:17:32.250Z"}
+        {"id":25,"kind":"ask","title":"需要决定","rule":"处理 GitHub Issue","createdAt":"2026-11-09T09:17:32.250Z"}
         """.utf8))
         func page(_ runs: String, next: String) throws -> HubState {
             try JSONDecoder().decode(HubState.self, from: Data("""
@@ -14,8 +14,8 @@ struct CardTraceTests {
         }
         let first = try page("[]", next: "\"hasMore\":true,\"nextBefore\":1402")
         let second = try page("""
-        [{"id":1402,"rule":"处理云效工作项","state":"done","attempts":0,"finishedAt":"2026-11-09T09:17:32.250Z","events":[{"source":"yunxiao","type":"workitem.opened","subject":"MGMF-99"}]},
-         {"id":1401,"rule":"处理云效工作项","state":"done","attempts":0,"finishedAt":"2026-11-09T09:17:32.250Z","events":[{"source":"yunxiao","type":"card.answered","subject":"MGMF-47"}]}]
+        [{"id":1402,"rule":"处理 GitHub Issue","state":"done","attempts":0,"finishedAt":"2026-11-09T09:17:32.250Z","events":[{"source":"github","type":"issues.opened","subject":"MGMF-99"}]},
+         {"id":1401,"rule":"处理 GitHub Issue","state":"done","attempts":0,"finishedAt":"2026-11-09T09:17:32.250Z","events":[{"source":"github","type":"card.answered","subject":"MGMF-47"}]}]
         """, next: "\"hasMore\":false")
         let result = try await CardTrace.lookup(card: card, page: { before in
             before == nil ? first : second

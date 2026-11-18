@@ -91,20 +91,36 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = ProcessInfo.processInfo.environment["OPEN_TAB"] ?? "home"
 
+    private var homeTab: some View {
+        HomeView()
+            .tabItem { Label("首页", systemImage: "house") }
+            .tag("home")
+    }
+
+    private var issuesTab: some View {
+        IssuesView()
+            .tabItem { Label("工作项", systemImage: "square.stack.3d.up") }
+            .tag("issues")
+    }
+
+    private var createTab: some View {
+        Color.clear
+            .tabItem { Label("新建", systemImage: "plus.circle.fill") }
+            .tag("create")
+    }
+
+    private var settingsTab: some View {
+        SettingsView()
+            .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
+            .tag("settings")
+    }
+
     var body: some View {
         TabView(selection: $tab) {
-            HomeView()
-                .tabItem { Label("首页", systemImage: "house") }
-                .tag("home")
-            IssuesView()
-                .tabItem { Label("工作项", systemImage: "square.stack.3d.up") }
-                .tag("issues")
-            Color.clear
-                .tabItem { Label("新建", systemImage: "plus.circle.fill") }
-                .tag("create")
-            SettingsView()
-                .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
-                .tag("settings")
+            homeTab
+            issuesTab
+            createTab
+            settingsTab
         }
         .onChange(of: tab) { oldValue, newValue in
             // 「新建」是动作不是页面：弹出表单后立刻回到原来的页签。
@@ -114,17 +130,10 @@ struct RootView: View {
             }
         }
         .sheet(item: $createRequest.draft) { draft in
-            NavigationStack {
-                CreateIssueForm(initialTitle: draft.title,
-                                initialText: draft.text,
-                                initialCategory: draft.category,
-                                onCreated: { _ in
-                    createRequest.draft = nil
-                    tab = "issues"
-                    NotificationCenter.default.post(name: .issuesShouldReload, object: nil)
-                }, onCancel: {
-                    createRequest.draft = nil
-                })
+            CreateDraftSheet(draft: draft) { _ in
+                createRequest.draft = nil
+                tab = "issues"
+                NotificationCenter.default.post(name: .issuesShouldReload, object: nil)
             }
         }
         .preferredColorScheme(settings.appearance.colorScheme)
@@ -153,6 +162,22 @@ struct RootView: View {
                 DeepLink.shared.cardID = id
             }
             tab = url.host == "issues" ? "issues" : "home"
+        }
+    }
+}
+
+/// 「新建」弹层独立成 view：减轻外层 body 的类型检查负担。
+private struct CreateDraftSheet: View {
+    let draft: CreateRequest.Draft
+    let onFinished: (Bool) -> Void
+
+    var body: some View {
+        NavigationStack {
+            CreateIssueForm(initialTitle: draft.title,
+                            initialText: draft.text,
+                            initialCategory: draft.category,
+                            onCreated: { created in onFinished(created) },
+                            onCancel: { onFinished(false) })
         }
     }
 }

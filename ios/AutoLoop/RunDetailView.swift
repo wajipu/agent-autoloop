@@ -433,8 +433,8 @@ struct CardDetailView: View {
                 traceError = true
             }
             if settings.configured, let serial = trace?.serial ?? card.lane, isWorkitemSerial(serial) {
-                let yunxiao = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
-                relatedItem = try? await yunxiao.findWorkitem(serialNumber: serial)
+                let github = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
+                relatedItem = try? await github.findWorkitem(serialNumber: serial)
             }
         }
     }

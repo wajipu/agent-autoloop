@@ -1,6 +1,5 @@
 # AutoLoop（iOS）
 
-agent-autoloop 的 iPhone 客户端：一个首页看中台的活，一个页签看云效的工作项。
 
 ## 已经有的
 
@@ -14,9 +13,7 @@ agent-autoloop 的 iPhone 客户端：一个首页看中台的活，一个页签
 - Agent：在线状态、所在电脑、用的 Agent
 - 右上角图表按钮进「统计」：流程条形图、最近 12 小时、累计构成环形图、花费
 
-**工作项（云效）**
 - 缺陷 / 任务 / 需求 切换，按状态分组，搜索、状态下拉筛选、下拉刷新
-- 详情：编号、状态、类型、负责人、创建/更新时间、正文（Markdown 渲染）、「在云效打开」
 
 **设置**（根页只有两行，点进去分别是）
 - 中台：地址、本人密钥（钥匙串）、测试连接
@@ -24,7 +21,6 @@ agent-autoloop 的 iPhone 客户端：一个首页看中台的活，一个页签
 - 规则运行操作：右侧菜单暂停、恢复或立即运行；暂停可填写原因和自动恢复时间，列表显示暂停状态与原因；规则页支持下拉刷新
 - 立即运行先确认，按对象分事项的规则需要填写对象编号；提交成功只表示进入调度，实际执行结果到首页查看
 - Agent：列表、新增、编辑类型/接单电脑/权限/命令、删除（被规则用着的不让删）
-- 云效：企业下拉（KoKLam / 众流，自动带项目 id 和默认类型）、令牌（钥匙串）、默认类型、高级里的企业/项目 id
 
 UI 全部用系统原生组件（`List` + `.insetGrouped`、`Form`、`ContentUnavailableView`、`.searchable`、`.refreshable`），
 正文用 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui) 渲染。
@@ -65,11 +61,9 @@ SIMCTL_CHILD_HUB_KEY="<本人的密钥>" \
 ## 数据从哪来
 
 - 中台：`GET {hub}/v1/state`，`Authorization: Bearer <本人的密钥>`
-- 云效：`x-yunxiao-token` 直连 OpenAPI
 
 ```
 POST /oapi/v1/projex/organizations/{org}/workitems:search
 GET  /oapi/v1/projex/organizations/{org}/workitems/{编号}
 ```
 
-云效默认指向 KoKLam（`68359a6af957ee9df431ecaa` / 项目 `854d2f7e0a466c8d4e3dd69c85`）。

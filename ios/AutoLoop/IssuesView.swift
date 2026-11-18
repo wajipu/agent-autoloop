@@ -13,6 +13,10 @@ struct IssuesView: View {
     @State private var path = NavigationPath()
     @State private var creating = ProcessInfo.processInfo.environment["OPEN_CREATE"] == "1"
     @State private var shared: ShareInboxReader.Payload?
+    private var inboxFileURLs: [URL] {
+        guard let shared else { return [] }
+        return shared.files
+    }
     @State private var didRestoreCategory = false
 
     private var shown: [Workitem] {
@@ -86,14 +90,11 @@ struct IssuesView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .sheet(isPresented: $creating) {
-                NavigationStack {
-                    CreateIssueForm(initialText: shared?.text ?? "",
-                                    initialImages: shared?.files ?? []) { _ in
-                        if let shared { ShareInboxReader.clean(shared.files) }
-                        shared = nil
-                        creating = false
-                        Task { await load() }
-                    }
+                CreateIssueSheet(payload: shared) { created in
+                    if created, let shared { ShareInboxReader.clean(shared.files) }
+                    shared = nil
+                    creating = false
+                    if created { Task { await load() } }
                 }
             }
             .toolbar {
@@ -117,7 +118,7 @@ struct IssuesView: View {
             }
             .overlay {
                 if !settings.configured {
-                    ContentUnavailableView("还没配云效令牌",
+                    ContentUnavailableView("还没配 GitHub 令牌",
                                            systemImage: "key",
                                            description: Text("去「设置」填一下令牌"))
                 } else if loading && items.isEmpty {
@@ -151,7 +152,7 @@ struct IssuesView: View {
         guard settings.configured else { return }
         loading = true
         defer { loading = false }
-        let client = YunxiaoClient(orgId: settings.orgId, projectId: settings.projectId, token: settings.token)
+        let client = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
         do {
             let all = try await client.searchTree(category: category.rawValue)
             // 列表只显示主单；子单在主单详情里看
@@ -263,5 +264,25 @@ enum StatusStyle {
         if gap < 86_400 { return "\(Int(gap / 3600)) 小时前" }
         if gap < 7 * 86_400 { return "\(Int(gap / 86_400)) 天前" }
         return relativeFormatter.localizedString(for: date, relativeTo: .now)
+    }
+}
+
+
+/// 建单弹层独立成 view：减轻外层 TabView 的类型检查负担。
+private struct CreateIssueSheet: View {
+    let payload: ShareInboxReader.Payload?
+    let onFinished: (Bool) -> Void
+
+    private var inboxURLs: [URL] {
+        payload?.files ?? []
+    }
+
+    var body: some View {
+        NavigationStack {
+            CreateIssueForm(initialText: payload?.text ?? "",
+                            initialImages: inboxURLs,
+                            onCreated: { created in onFinished(created) },
+                            onCancel: { onFinished(false) })
+        }
     }
 }
