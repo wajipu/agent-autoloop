@@ -30,6 +30,8 @@ struct HomeView: View {
 
                     nowSection(state)
 
+                    runningSection(state)
+
                     if !state.cards.isEmpty {
                         Section("需要你决定") {
                             ForEach(state.cards) { card in
@@ -49,30 +51,28 @@ struct HomeView: View {
             .refreshable { await load() }
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        confirmPauseAll = true
-                    } label: {
-                        Image(systemName: "pause.circle")
-                    }
-                    .tint(.orange)
-                    .disabled(ruleBusy || ruleCount == 0 || pausedRuleCount == ruleCount)
-                    .accessibilityLabel("暂停全部规则")
-
-                    Button {
-                        Task { await resumeAllRules() }
-                    } label: {
-                        Image(systemName: "play.circle")
-                    }
-                    .tint(.green)
-                    .disabled(ruleBusy || pausedRuleCount == 0)
-                    .accessibilityLabel("恢复全部规则")
-
                     NavigationLink {
                         StatisticsView(state: state, runs: runs)
                     } label: {
                         Image(systemName: "chart.bar.xaxis")
                     }
                     .disabled(state == nil)
+
+                    Menu {
+                        Button("暂停全部规则", role: .destructive) {
+                            confirmPauseAll = true
+                        }
+                        .disabled(ruleBusy || ruleCount == 0 || pausedRuleCount == ruleCount)
+
+                        Button("恢复全部规则") {
+                            Task { await resumeAllRules() }
+                        }
+                        .disabled(ruleBusy || pausedRuleCount == 0)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .disabled(ruleBusy || ruleCount == 0)
+                    .accessibilityLabel("规则批量操作")
                 }
             }
             .overlay {
@@ -121,10 +121,6 @@ struct HomeView: View {
     @ViewBuilder
     private func nowSection(_ state: HubState) -> some View {
         let t = state.totals
-        let active = state.runs
-            .filter { ["claimed", "queued", "unknown"].contains($0.state) }
-            .sorted { ($0.state == "claimed" ? 0 : 1, -$0.id) < ($1.state == "claimed" ? 0 : 1, -$1.id) }
-            .prefix(4)
         let nextBatch = (state.lines ?? [])
             .filter { $0.paused == nil }
             .compactMap { line in HubRun.date(line.next).map { (line.name, $0) } }
@@ -169,32 +165,43 @@ struct HomeView: View {
                 .foregroundStyle(.orange)
                 .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 10, trailing: 16))
             }
+        } header: {
+            Text("概览")
+        }
+    }
 
-            ForEach(Array(active)) { run in
-                NavigationLink(value: run) {
-                    HStack(spacing: 8) {
-                        Text("#\(run.id)")
-                            .font(.caption2)
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
-                        Text(run.rule)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                        Spacer()
-                        StateBadge(state: run.state)
+    /// 正在跑/排队的轮次，单独一个分区，没有就不显示。
+    @ViewBuilder
+    private func runningSection(_ state: HubState) -> some View {
+        let active = state.runs
+            .filter { ["claimed", "queued", "unknown"].contains($0.state) }
+            .sorted { ($0.state == "claimed" ? 0 : 1, -$0.id) < ($1.state == "claimed" ? 0 : 1, -$1.id) }
+        if !active.isEmpty {
+            Section("进行中") {
+                ForEach(Array(active.prefix(4))) { run in
+                    NavigationLink(value: run) {
+                        HStack(spacing: 8) {
+                            Text("#\(run.id)")
+                                .font(.caption2)
+                                .monospacedDigit()
+                                .foregroundStyle(.tertiary)
+                            Text(run.rule)
+                                .font(.subheadline)
+                                .lineLimit(1)
+                            Spacer()
+                            StateBadge(state: run.state)
+                        }
+                        .padding(.vertical, 5)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     }
-                    .padding(.vertical, 5)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                }
+
+                if active.count > 4 {
+                    Text("还有 \(active.count - 4) 轮，进「统计」看全部")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
-
-            if state.runs.filter({ ["claimed", "queued", "unknown"].contains($0.state) }).count > 4 {
-                Text("还有 \(state.runs.filter { ["claimed", "queued", "unknown"].contains($0.state) }.count - 4) 轮，进「统计」看全部")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-        } header: {
-            Text("现在")
         }
     }
 
@@ -344,8 +351,8 @@ struct HeroCard: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text("\(state.totals.doneToday)")
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundStyle(.green)
+                    .font(.system(size: 40, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
                     .monospacedDigit()
             }
 
@@ -354,21 +361,16 @@ struct HeroCard: View {
                     x: .value("时间", bucket.hour, unit: .hour),
                     y: .value("轮次", bucket.count)
                 )
-                .foregroundStyle(Color.accentColor.opacity(0.75))
+                .foregroundStyle(Color.accentColor.opacity(0.35))
                 .cornerRadius(2)
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
-            .frame(height: 46)
+            .frame(height: 40)
 
-            HStack(spacing: 14) {
-                Label("累计 \(state.totals.done)", systemImage: "checkmark.circle")
-                Label(money(state.totals.usage.cost), systemImage: "creditcard")
-                Label(tokens(state.totals.usage.tokens), systemImage: "text.word.spacing")
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .labelStyle(.titleAndIcon)
+            Text("累计 \(state.totals.done) 轮 · \(money(state.totals.usage.cost)) · \(tokens(state.totals.usage.tokens)) tokens")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
