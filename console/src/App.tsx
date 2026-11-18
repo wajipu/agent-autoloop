@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { BottomTabs, type View } from "@/components/BottomTabs";
-import { IssuesView } from "@/components/IssuesView";
 import { OverviewView } from "@/components/OverviewView";
 import { RunsView } from "@/components/RunsView";
 import { SettingsView } from "@/components/SettingsView";
@@ -15,7 +14,7 @@ import type { HubState } from "@/types";
 export default function App() {
   const [view, setView] = useState<View>(() => {
     const hash = window.location.hash.replace("#", "");
-    return (["overview", "issues", "runs", "submit", "settings"] as string[]).includes(hash) ? (hash as View) : "overview";
+    return (["overview", "runs", "submit", "settings"] as string[]).includes(hash) ? (hash as View) : "overview";
   });
   const [nonce, setNonce] = useState(0);
   const [updated, setUpdated] = useState<string>("");
@@ -61,7 +60,6 @@ export default function App() {
 
       <main className="mx-auto max-w-2xl px-3 pt-3 pb-[calc(72px+env(safe-area-inset-bottom))]">
         {view === "overview" && <OverviewView nonce={nonce} onState={onState} />}
-        {view === "issues" && <IssuesView nonce={nonce} />}
         {view === "runs" && <RunsView nonce={nonce} onState={onState} />}
         {view === "submit" && <SubmitView />}
         {view === "settings" && <SettingsView onSaved={bump} />}

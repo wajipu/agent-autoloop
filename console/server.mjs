@@ -22,45 +22,9 @@ const TYPES = {
   ".json": "application/json; charset=utf-8",
 };
 
-const YUNXIAO_CONFIG =
-  process.env.YUNXIAO_CONFIG ?? join(homedir(), ".agent-autoloop/work/yunxiao-watch/config.json");
-const YUNXIAO_BASE = process.env.YUNXIAO_BASE ?? "https://openapi-rdc.aliyuncs.com";
-
-function yunxiaoConfig() {
-  return JSON.parse(readFileSync(YUNXIAO_CONFIG, "utf8"));
-}
 
 /** 令牌：环境变量优先，其次 config 指的 env 文件。浏览器永远拿不到。 */
-function yunxiaoToken(config) {
-  const name = config.org.tokenEnv ?? "YUNXIAO_TOKEN";
-  if (process.env[name]) return process.env[name];
-  const file = config.org.envFile?.replace(/^~/, homedir());
-  if (!file || !existsSync(file)) return "";
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const cut = trimmed.indexOf("=");
-    if (cut > 0 && trimmed.slice(0, cut).trim() === name) {
-      return trimmed.slice(cut + 1).trim().replace(/^["']|["']$/g, "");
-    }
-  }
-  return "";
-}
 
-async function yunxiaoApi(config, path, init = {}) {
-  const res = await fetch(`${YUNXIAO_BASE}${path}`, {
-    ...init,
-    headers: {
-      "x-yunxiao-token": yunxiaoToken(config),
-      accept: "application/json",
-      ...(init.body ? { "content-type": "application/json" } : {}),
-    },
-    signal: AbortSignal.timeout(30000),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`云效返回 ${res.status}：${text.slice(0, 160)}`);
-  return JSON.parse(text);
-}
 
 function workitemUrl(config, item) {
   return encodeURI(
@@ -102,83 +66,6 @@ function htmlToText(html) {
     .trim();
 }
 
-async function yunxiao(req, res, url) {
-  const config = yunxiaoConfig();
-  const send = (code, body) => {
-    res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-    res.end(JSON.stringify(body));
-  };
-  const org = config.org.id;
-
-  const detailMatch = url.pathname.match(/^\/yunxiao\/items\/([A-Za-z0-9-]+)$/);
-  try {
-    if (detailMatch) {
-      const item = await yunxiaoApi(
-        config,
-        `/oapi/v1/projex/organizations/${org}/workitems/${encodeURIComponent(detailMatch[1])}`,
-      );
-      const raw = item.description;
-      let text = typeof raw === "string" ? raw : (raw?.htmlValue ?? "");
-      if (typeof text === "string" && text.trim().startsWith("{")) {
-        try {
-          text = JSON.parse(text)?.htmlValue ?? "";
-        } catch {
-          /* 不是 JSON，原样当正文 */
-        }
-      }
-      return send(200, {
-        ...slim(item, config),
-        document: text ? (text.includes("<") ? htmlToText(text) : text.trim()) : "",
-        labels: (item.labels ?? []).map((label) => label.name).filter(Boolean),
-      });
-    }
-
-    if (url.pathname === "/yunxiao/meta") {
-      let projectName = "";
-      try {
-        const project = await yunxiaoApi(config, `/oapi/v1/projex/organizations/${org}/projects/${config.projectId}`);
-        projectName = project.name ?? "";
-      } catch {
-        /* 项目名拿不到不影响用 */
-      }
-      return send(200, {
-        org: config.org.name ?? config.org.id,
-        project: projectName,
-        defaultCategory: config.defaultCategory ?? "Task",
-      });
-    }
-
-    if (url.pathname === "/yunxiao/items") {
-      const category = url.searchParams.get("category") || "Task";
-      const status = url.searchParams.get("status") || "";
-      const q = (url.searchParams.get("q") || "").trim().toLowerCase();
-      const all = [];
-      for (let page = 1; page <= 5; page += 1) {
-        const batch = await yunxiaoApi(config, `/oapi/v1/projex/organizations/${org}/workitems:search`, {
-          method: "POST",
-          body: JSON.stringify({ category, spaceId: config.projectId, spaceType: "Project", page, perPage: 100 }),
-        });
-        const list = Array.isArray(batch) ? batch : [];
-        all.push(...list);
-        if (list.length < 100) break;
-      }
-      let items = all.map((item) => slim(item, config));
-      const statuses = [...new Set(items.map((item) => item.status).filter(Boolean))];
-      if (status) items = items.filter((item) => item.status === status);
-      if (q) {
-        items = items.filter(
-          (item) =>
-            String(item.subject ?? "").toLowerCase().includes(q) ||
-            String(item.serialNumber ?? "").toLowerCase().includes(q),
-        );
-      }
-      return send(200, { total: all.length, items, statuses });
-    }
-  } catch (error) {
-    return send(502, { error: String(error.message ?? error) });
-  }
-  return send(404, { error: "not found" });
-}
 
 
 // ── 规则配置（手机上改，不用 SSH）──────────────────────────────────────────────
@@ -324,10 +211,6 @@ createServer((req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   if (url.pathname.startsWith("/config/")) {
     config(req, res, url);
-    return;
-  }
-  if (url.pathname.startsWith("/yunxiao/")) {
-    yunxiao(req, res, url);
     return;
   }
   if (req.url.startsWith("/api/")) {
