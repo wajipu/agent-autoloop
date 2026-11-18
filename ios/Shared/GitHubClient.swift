@@ -49,7 +49,8 @@ struct GitHubClient {
 
 
     private func request(path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> Data {
-        guard let url = URL(string: base.absoluteString + path) else { throw URLError(.badURL) }
+        let normalized = path.hasPrefix("/") ? path : "/" + path
+        guard let url = URL(string: base.absoluteString + normalized) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
