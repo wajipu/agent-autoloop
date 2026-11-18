@@ -443,6 +443,9 @@
             "prompt": {
               "type": "string"
             },
+            "title": {
+              "type": "string"
+            },
             "emits": {
               "type": "object",
               "properties": {
@@ -482,6 +485,9 @@
               "type": "string"
             },
             "effort": {
+              "type": "string"
+            },
+            "tier": {
               "type": "string"
             },
             "access": {
@@ -902,9 +908,15 @@
         },
         "at": {
           "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
-      "required": ["card", "title", "options", "choice", "chosen", "text", "about", "by", "at"],
+      "required": ["card", "title", "options", "choice", "chosen", "text", "about", "by", "at", "events"],
       "additionalProperties": true
     },
     "context-timer": {
@@ -918,9 +930,15 @@
         },
         "at": {
           "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
-      "required": ["key", "about", "at"],
+      "required": ["key", "about", "at", "events"],
       "additionalProperties": true
     },
     "context-open": {

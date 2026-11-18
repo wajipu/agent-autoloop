@@ -89,9 +89,14 @@ export function formatWhy(id: number, facts: Fact[]) {
       if (table === "events" && row && !before && events.has(row.id)) {
         add(row.received_at, `触发事件：${eventText(row)}`);
       }
+      if (fact.type === "replayRule" && table === "run_events" && row?.run_id === id) {
+        const event = previous.get(`events:${row.event_id}`);
+        add(fact.at, `本人补跑暂停时跳过的事件${event ? `：${eventText(event)}` : ""}`);
+      }
       if (table === "runs" && row?.id === id) tellRun(fact, row, before, receipt);
       if (table === "cards" && row) tellCard(row, before, receipt);
-      if (receipt && table === "timers") {
+      // A look-again that already came due leaves the projection once its run ends; that is not a cancellation.
+      if (receipt && table === "timers" && (row || before?.event_id == null)) {
         add(fact.at, row ? `安排复查：${row.about}；时间 ${time(row.at)}` : `取消复查：${before?.key ?? key}`);
       }
       if (receipt && table === "events" && row && !before && !events.has(row.id)) {

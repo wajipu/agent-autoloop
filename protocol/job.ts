@@ -3,13 +3,14 @@ export type Job = {
   run: number;
   token: string;
   attempt: number;
-  rule: Pick<Rule, "name" | "cwd" | "skill" | "prompt" | "emits">;
+  rule: Pick<Rule, "name" | "cwd" | "skill" | "prompt" | "title" | "emits">;
   agent: {
     id: string;
     name: string;
     use: string;
     model?: string;
     effort?: string;
+    tier?: string;
     access: string;
     command?: string[];
     program?: string;
@@ -40,9 +41,10 @@ export type Job = {
       about: string;
       by: string | null;
       at: string;
+      events: string[];
     }[];
-    timers: { key: string; about: string; at: string }[];
-    waiting: { key: string; about: string; at: string }[];
+    timers: { key: string; about: string; at: string; events: string[] }[];
+    waiting: { key: string; about: string; at: string; events: string[] }[];
     open: { card: number; title: string; text: string; at: string }[];
     decided: { card: number; title: string; choice: string | null; at: string }[];
   };

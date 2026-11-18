@@ -68,7 +68,7 @@ The numbers match the diagram above:
 1. **An event comes in.** A 9:00 AM schedule, a new GitHub issue, or a production alert becomes a standard event sent to the kernel.
 2. **Dispatched by your rules.** Your rules decide which agent handles it and in which folder. New events for the same subject while it is queued merge into one round.
 3. **Work one round and exit.** The agent puts its result in its final message, and the process exits.
-4. **Asks only when needed.** For sensitive actions like deleting data, restarting a service, spending money, or messaging people, the kernel sends you a card through Feishu or a desktop notification. While you take your time, no agent process runs and no tokens are spent.
+4. **Asks only when needed.** For sensitive actions like deleting data, taking a service down, spending money, or messaging people, the kernel sends you a card through Feishu or a desktop notification. While you take your time, no agent process runs and no tokens are spent.
 5. **One tap resumes it.** Your answer picks up the original conversation and finishes the job.
 
 Anything the agent can handle alone takes the auto-loop at the top of the diagram: finish outright, or schedule a follow-up check (say, in 30 minutes) without bothering you.
@@ -102,7 +102,7 @@ External events work the same way once the source is connected. To hand new GitH
 }
 ```
 
-`agent-autoloop pause <rule>` and `resume <rule>` pause and resume one rule: while paused it skips its scheduled times and doesn't take events, and a resume doesn't catch up on what was skipped. `agent-autoloop run <rule>` runs it once now. These are kept in the hub's log; `rules.json` is not changed.
+`agent-autoloop pause <rule>` and `resume <rule>` pause and resume one rule: while paused it skips its scheduled times and doesn't take or queue events, and a resume doesn't catch up on its own. A resume lists the events the pause skipped and prints `agent-autoloop replay <rule> --since <time>`, which hands them all to the rule at once, each only once. `agent-autoloop run <rule>` runs it once now. These are kept in the hub's log; `rules.json` is not changed. `agent-autoloop runs [rule]` lists finished rounds, `--before <round>` pages back, and `agent-autoloop why <round>` tells the full story of one.
 
 Changes take effect within seconds of saving. Run `agent-autoloop check` to validate, `agent-autoloop check <file>` to validate a draft without touching the running hub, `agent-autoloop rules explain [file]` to see the rules in effect and their next runs (a draft file too), and `agent-autoloop emit <type> --dry-run` to preview who an event would go to (it doesn't contact the hub or write to the log). If you make a mistake, or the file is deleted or can't be read, the hub keeps running the previous valid rules and sends you a card about it.
 
@@ -155,11 +155,11 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 | Side | Built in | Setup |
 |---|---|---|
 | **Events**: how work is found | [GitHub Webhook](plugins/github/source.ts), [GitLab Webhook](plugins/gitlab/source.ts), [HTTP API](docs/protocol.md#来源把世界变成事件), [cron rules](skills/agent-autoloop/SKILL.md#改规则), [issue polling script](examples/watch-github-issues.sh) | [Guide](skills/agent-autoloop/SKILL.md#接一个事件插件) |
-| **Agents**: who does the work | [Claude Code](plugins/claude/agent.ts), [Codex](plugins/codex/agent.ts), [ACP](plugins/acp/agent.ts), [DeepSeek Harness](plugins/dsh/agent.ts), [generic command](plugins/command/agent.ts) | [Guide](skills/agent-autoloop/SKILL.md#接一个-agent) |
+| **Agents**: who does the work | [Claude Code](plugins/claude/agent.ts), [Codex](plugins/codex/agent.ts), [ACP](plugins/acp/agent.ts), [DeepSeek Harness](plugins/dsh/agent.ts), [ZCode](plugins/zcode/agent.ts), [generic command](plugins/command/agent.ts) | [Guide](skills/agent-autoloop/SKILL.md#接一个-agent) |
 | **Channels**: how cards reach you | [Desktop notifications](plugins/desktop/channel.ts) (on by default), [Feishu](plugins/feishu/channel.ts), [DingTalk / WeCom / Slack / Discord](plugins/webhook/templates.ts) | [Guide](skills/agent-autoloop/SKILL.md#接一个通道) |
 | **Delivery**: CI/CD as a plugin | [`delivery`](plugins/delivery/delivery.ts) | [Guide](skills/agent-autoloop/SKILL.md#交付流水线) |
 
-**What has been tested:** Claude Code, Codex, and ACP (with the official Codex ACP adapter) have run multi-turn Q&A and session resumption across processes. Feishu has run real delivery, button callbacks, and card updates. The four webhook templates have only been checked against local mock servers, and the GitLab webhook against the payloads in its docs, not a real GitLab. These text channels answer through a link, so `hub.publicUrl` must be reachable from your phone or computer.
+**What has been tested:** Claude Code, Codex, and ACP (with the official Codex ACP adapter) have run multi-turn Q&A and session resumption across processes. ZCode has run a question, an answer, and the resumed session. Feishu has run real delivery, button callbacks, and card updates. The four webhook templates have only been checked against local mock servers, and the GitLab webhook against the payloads in its docs, not a real GitLab. These text channels answer through a link, so `hub.publicUrl` must be reachable from your phone or computer.
 
 **Built-in agents through another service.** To send Claude Code or Codex to a third-party model service, or to set environment variables before it starts, write a small script that sets them and starts the program, then put `"program": "/path/to/script"` on the agent. Session resumption and usage reporting still work. See the [guide](skills/agent-autoloop/SKILL.md#接一个-agent).
 
@@ -176,9 +176,9 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 
 OpenClaw's `agent exec` stops each run after 600 seconds by default, and that counts as a failure; for longer work add `--timeout <seconds>` to the command (`0` means no limit).
 
-Agents that speak ACP connect with `use: "acp"` and can go on in the same session: [Gemini CLI](https://geminicli.com/docs/cli/acp-mode/) is `"command": ["gemini", "--acp"]`, and [OpenCode](https://opencode.ai/docs/acp) is `"command": ["opencode", "acp"]`. Both answered the ACP handshake (Gemini CLI 0.67.0, OpenCode 1.1.2); multi-turn Q&A and session resumption have not been run yet.
+Agents that speak ACP connect with `use: "acp"` and can go on in the same session: [Gemini CLI](https://geminicli.com/docs/cli/acp-mode/) is `"command": ["gemini", "--acp"]`, [OpenCode](https://opencode.ai/docs/acp) is `"command": ["opencode", "acp"]`, and Antigravity is `"command": ["agy", "acp"]`. Gemini CLI 0.67.0 and OpenCode 1.1.2 answered the ACP handshake; multi-turn Q&A and session resumption have not been run yet. Antigravity (agy 1.5.5) has run both on Windows.
 
-**Delivery pipeline.** Add the `deliver` label to a GitHub PR and it follows through to release: **review → wait for CI → merge → wait for deploy → verify the live version**. The reviewer can be set per authoring agent: a Codex model and reasoning effort, another command, or no review. Settings are read only from `main`, and PR code is never checked out or run on the worker machine. Queueing, concurrency, and retries come from the kernel.
+**Delivery pipeline.** Once delivery rules are configured, the `deliver` label takes a GitHub PR through review, CI, merge, deployment, and live-version verification. Projects can choose reviewers per authoring agent or share a policy. Delivery reads trusted settings from main and reviews a read-only snapshot on the worker.
 
 **Write your own.** Start from the runnable [agent](examples/plugins/hello-agent/agent.ts), [channel](examples/plugins/hello-channel/channel.ts), and [event](examples/plugins/hello-source/source.ts) templates and the [plugin guide](docs/plugins.md). For web tasks, read [browser access](docs/plugins.md#浏览器接入) first. The CLI and [MCP](skills/agent-autoloop/SKILL.md#mcp-与密钥撤销) can also inspect and answer cards.
 

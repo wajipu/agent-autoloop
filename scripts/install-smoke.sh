@@ -12,7 +12,10 @@ up_pid=""
 
 cleanup() {
   code=$?
-  if [ -n "$up_pid" ]; then kill "$up_pid" 2>/dev/null || true; fi
+  if [ -n "$up_pid" ]; then
+    kill "$up_pid" 2>/dev/null || true
+    wait "$up_pid" 2>/dev/null || true
+  fi
   if [ "$code" -ne 0 ] && [ -f "$work/up.log" ]; then
     echo "--- up.log"
     cat "$work/up.log"
@@ -44,7 +47,7 @@ export HOME="$work/home"
 export DISPLAY=:99
 export AGENT_AUTOLOOP_HOME="$work/hub"
 export AGENT_AUTOLOOP_REPO="file://$repo"
-unset AGENT_AUTOLOOP_RULES AGENT_AUTOLOOP_PUBLIC_URL AGENT_AUTOLOOP_COMMIT
+unset AGENT_AUTOLOOP_RULES AGENT_AUTOLOOP_PUBLIC_URL AGENT_AUTOLOOP_COMMIT AGENT_AUTOLOOP_RELEASE
 mkdir -p "$HOME" "$work/bin"
 export PATH="$work/bin:$HOME/.local/bin:$PATH"
 
@@ -117,6 +120,7 @@ agent-autoloop uninstall --yes </dev/null
 [ ! -e "$AGENT_AUTOLOOP_HOME/app" ] || fail "uninstall left the program"
 if [ -e "$HOME/.local/bin/agent-autoloop" ] || [ -L "$HOME/.local/bin/agent-autoloop" ]; then fail "the command is still there"; fi
 if healthy >/dev/null 2>&1; then fail "the hub is still running"; fi
+wait "$up_pid" 2>/dev/null || true
 up_pid=""
 left=$(find "$HOME" \( -type f -o -type l \))
 [ -z "$left" ] || fail "left behind: $left"

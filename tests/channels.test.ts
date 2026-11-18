@@ -6,7 +6,11 @@
 // replacement tokens in card text rewrite a webhook template. A settled card Feishu won't let the bot change stays at the
 // version before the answer; an open one is sent again with buttons that don't count.
 // A slow CLI call must not block the hub's HTTP loop while looking up a user, sending or updating a card.
+// An ask card that only takes choices loses the account someone would type; words without a choice must still answer.
 // A U+2028 or U+2029 in what someone typed, which JSON leaves as it is, cuts the click's line and loses the click.
+// Older lark-cli releases reject `--content -`, so a first card must not depend on that stdin convention.
+// Feishu still counting an old connection of the app makes lark-cli refuse every listener for hours: retried every ten
+// seconds, unexplained, that floods the log and hides that clicks aren't arriving; waiting it out mustn't hold up stopping.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -39,6 +43,17 @@ const base: Card = {
   link: "https://hub.test/c/x",
 };
 
+test("a card says which rule or task it came from, in every state, unless its title already does", () => {
+  const from = (card: Card) => (render(card).header as any).subtitle?.content;
+  assert.equal(from({ ...base, rule: "开源站每日巡检" }), "来源：开源站每日巡检");
+  assert.equal(
+    from({ ...base, rule: "开源站每日巡检", state: "done", choice: 0, result: "删了" }),
+    "来源：开源站每日巡检",
+  );
+  assert.equal(from(base), undefined, "the hub's own cards name no rule");
+  assert.equal(from({ ...base, kind: "notice", rule: "AIHOT 告警", title: "AIHOT 告警" }), undefined);
+});
+
 test("a card shows its options while it's open, and what became of it after", () => {
   const open = render(base);
   const blocks = open.body.elements.filter((e) => e.tag === "interactive_container") as any[];
@@ -59,6 +74,13 @@ test("a card shows its options while it's open, and what became of it after", ()
   assert.ok(
     noticeOpen.includes('"form_action_type":"submit"'),
     "the way a Feishu 2.0 card marks a form's submit button",
+  );
+  const askOpen = JSON.stringify(render(base).body.elements);
+  assert.ok(askOpen.includes("ask_text_submit_5"), "an ask card can take words too, not only a choice");
+  assert.ok(askOpen.includes('"name":"note"'), "the ask form's field has a name, so its words come back");
+  assert.ok(
+    !said({ ...base, state: "decided", choice: 1 }).includes('"tag":"form"'),
+    "a settled ask card has no form left to submit",
   );
   assert.match(
     said({ ...base, kind: "notice", state: "closed", options: [], result: "已处理", answer: "清了 3GB" }),
@@ -134,6 +156,88 @@ test("feishu: a lark-cli that can't be started is said, not left to take the hub
   assert.match(lines[0] ?? "", /ENOENT/);
 });
 
+test("feishu: a listener Feishu refuses for another connection is explained and tried again slowly", async () => {
+  const calls = join(dir, "lark-refused.log");
+  const lark = join(dir, "lark-cli-refused");
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+case "$*" in
+  *"event consume"*)
+    echo consume >> "${calls}"
+    echo "Error: failed_precondition: another event bus is already connected to this app (1 remote event connection(s) detected via API)" >&2
+    exit 1 ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const stop = new AbortController();
+  const lines: string[] = [];
+  const hub = {
+    nextCard: () => new Promise((resolve) => stop.signal.addEventListener("abort", () => resolve({ card: null }))),
+  };
+  setTimeout(() => stop.abort(), 1_500);
+  const started = Date.now();
+  await feishu({
+    hub: hub as any,
+    options: { user: "ou_me", lark },
+    log: (line) => lines.push(line),
+    signal: stop.signal,
+  });
+  assert.ok(Date.now() - started < 4_000, "stopping doesn't wait out the pause before the next try");
+  assert.equal(readFileSync(calls, "utf8"), "consume\n");
+  const said = lines.join("\n");
+  assert.match(said, /卡片点击收不到/);
+  assert.match(said, /1 分钟后再试/);
+  assert.doesNotMatch(said, /10 seconds/);
+});
+
+test("feishu: a first card works without lark-cli's stdin content convention", async () => {
+  const lark = join(dir, "lark-cli-no-stdin-content");
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+case "$*" in
+  *"event consume"*) exec sleep 30 ;;
+  *"+messages-send"*)
+    previous=
+    content=
+    for argument do
+      if [ "$previous" = "--content" ]; then content=$argument; break; fi
+      previous=$argument
+    done
+    case "$content" in
+      \{*) echo '{"ok":true,"data":{"message_id":"om_5"}}' ;;
+      *) exit 1 ;;
+    esac ;;
+esac
+`,
+    { mode: 0o755 },
+  );
+  const stop = new AbortController();
+  const cards: (Card | null)[] = [base];
+  const delivered: unknown[][] = [];
+  const failed: unknown[][] = [];
+  const hub = {
+    async nextCard() {
+      if (cards.length) return { card: cards.shift()! };
+      stop.abort();
+      return { card: null };
+    },
+    async delivered(...args: unknown[]) {
+      delivered.push(args);
+      return {};
+    },
+    async failed(...args: unknown[]) {
+      failed.push(args);
+      return {};
+    },
+  };
+  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  assert.deepEqual(failed, []);
+  assert.deepEqual(delivered, [[5, 1, "om_5"]]);
+});
+
 test("feishu: sends once per card, updates in place, reports failure, and only real clicks count", async () => {
   const log = join(dir, "lark.log");
   const lark = join(dir, "lark-cli");
@@ -185,7 +289,7 @@ esac
     lark,
     readFileSync(lark, "utf8").replace(
       "*fail-me*) exit 1 ;;",
-      '*+messages-send*) body=$(cat); case "$body" in *fail-me*) exit 1 ;; esac; echo \'{"ok":true,"data":{"message_id":"om_5"}}\' ;;',
+      '*+messages-send*) case "$*" in *fail-me*) exit 1 ;; esac; echo \'{"ok":true,"data":{"message_id":"om_5"}}\' ;;',
     ),
   );
   await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
@@ -297,6 +401,53 @@ esac
       ["answer", 7, { choice: 0, by: "ou_me", ref: "om_7" }],
     ],
     "a submitted note and a plain click both count, the click with no empty text",
+  );
+});
+
+test("feishu: an ask card's text form answers with the words and no choice", async () => {
+  const log = join(dir, "lark-free.log");
+  const lark = join(dir, "lark-cli-free");
+  // A free-text submit has no choice: the words are the answer, and an empty one answers nothing.
+  writeFileSync(
+    lark,
+    `#!/bin/sh
+echo "$*" >> "${log}"
+case "$*" in
+  *"event consume"*)
+    echo '{"action_name":"ask_text_submit_7","action_tag":"button","action_value":"","form_value":"{\\"note\\":\\"账号 test-ops 密码 s3cret\\"}","operator_id":"ou_me","message_id":"om_7"}'
+    echo '{"action_name":"ask_text_submit_7","action_tag":"button","action_value":"","form_value":"{\\"note\\":\\"   \\"}","operator_id":"ou_me","message_id":"om_7"}'
+    exec sleep 30 ;;
+  *) cat > /dev/null; echo '{"ok":true,"data":{"message_id":"om_7"}}' ;;
+esac
+`,
+  );
+  chmodSync(lark, 0o755);
+  const stop = new AbortController();
+  const cards: (Card | null)[] = [{ ...base, id: 7, ref: "om_7" }];
+  const calls: unknown[][] = [];
+  const hub = {
+    async nextCard() {
+      if (cards.length) return { card: cards.shift()! };
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      stop.abort();
+      return { card: null };
+    },
+    async delivered() {
+      return {};
+    },
+    async failed() {
+      return {};
+    },
+    async answer(...args: unknown[]) {
+      calls.push(["answer", ...args]);
+      return { changed: true };
+    },
+  };
+  await feishu({ hub: hub as any, options: { user: "ou_me", lark }, log: () => {}, signal: stop.signal });
+  assert.deepEqual(
+    calls.filter((c) => c[0] === "answer"),
+    [["answer", 7, { by: "ou_me", ref: "om_7", text: "账号 test-ops 密码 s3cret" }]],
+    "the words count without a choice, and an empty submit doesn't answer",
   );
 });
 
