@@ -262,3 +262,32 @@ enum RunStyle {
         }
     }
 }
+
+struct HubAttachmentUploaded: Decodable {
+    let id: String
+    let name: String
+    let url: String
+}
+
+extension HubClient {
+    /// 附件直传中台（POST /v1/attachments，raw bytes），返回可放进 Issue 正文的绝对链接。
+    /// 链接带能力令牌（?t=），智能体免钥下载。
+    func uploadAttachment(name: String, data: Data) async throws -> String {
+        guard let base = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw HubError.notConfigured
+        }
+        let url = base.appending(path: "v1/attachments")
+            .appending(queryItems: [URLQueryItem(name: "name", value: name)])
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "content-type")
+        let (payload, resp) = try await URLSession.shared.upload(for: request, from: data)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw HubError.http((resp as? HTTPURLResponse)?.statusCode ?? -1,
+                                String(data: payload.prefix(200), encoding: .utf8) ?? "")
+        }
+        let uploaded = try JSONDecoder().decode(HubAttachmentUploaded.self, from: payload)
+        return base.absoluteString + uploaded.url
+    }
+}

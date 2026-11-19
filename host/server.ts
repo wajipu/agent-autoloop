@@ -3,6 +3,7 @@
 import { realpathSync, watch } from "node:fs";
 import { basename, dirname } from "node:path";
 import { RULES_FILE } from "./home.ts";
+import { readAttachment, saveAttachment } from "./attachments.ts";
 import { loadPlugin } from "./plugins.ts";
 import * as hub from "./runtime.ts";
 import { AuthError, NotFound } from "../kernel/errors.ts";
@@ -136,6 +137,8 @@ export function makeHandler(commit = "dev") {
     },
     stream: logStream,
     adapt: adaptWebhook,
+    saveAttachment,
+    readAttachment,
   });
   fire();
   return {

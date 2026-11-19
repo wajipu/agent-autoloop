@@ -22,6 +22,9 @@ export type Services = {
   wait(until: number, signal: AbortSignal): Promise<void>;
   stream(after: number, signal: AbortSignal, key: string): ReadableStream;
   adapt(source: string, headers: Headers, body: string): Promise<unknown[]>;
+  /** App 上传的附件（建品菜单图/PDF 等）：落盘 HOME/uploads，返回能力令牌供免钥取回。 */
+  saveAttachment(name: string, bytes: Uint8Array): { id: string; name: string; token: string };
+  readAttachment(id: string): { id: string; name: string; type: string; token: string; bytes: Uint8Array } | undefined;
 };
 
 const MAX_BODY = 1024 * 1024;
@@ -33,6 +36,26 @@ const KEY_HOLDERS: Record<string, string> = { owner: "本人", worker: "接单�
 const NO_STORE = { "cache-control": "no-store" };
 
 class TooLarge extends Error {}
+
+const MAX_ATTACHMENT = 25 * 1024 * 1024;
+
+/** 附件是二进制：和 readText 一样超额多读一点，让客户端能收到 413 而不是连不上。 */
+async function readBytes(request: Request, max: number) {
+  if (!request.body) return Buffer.alloc(0);
+  if (Number(request.headers.get("content-length")) > max) throw new TooLarge();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size <= max) chunks.push(value);
+    if (size > max + 1024 * 1024) throw new TooLarge();
+  }
+  if (size > max) throw new TooLarge();
+  return Buffer.concat(chunks);
+}
 
 async function readText(request: Request) {
   if (!request.body) return "";
@@ -306,6 +329,26 @@ async function route(call: Call): Promise<Response> {
     const found = eventOutcome(call.view, requireKey(call, "source"), Number(sent[1]));
     if (!found) throw new NotFound("没有这条事件");
     return json(found);
+  }
+  if (method === "POST" && path === "/v1/attachments") {
+    requireKey(call, "owner");
+    const name = (call.url.searchParams.get("name") ?? "附件").slice(0, 120);
+    const bytes = await readBytes(request, MAX_ATTACHMENT);
+    if (!bytes.length) throw new InputError("空附件");
+    const saved = services.saveAttachment(name, bytes);
+    return json({ ...saved, url: `/v1/files/${saved.id}?t=${saved.token}` });
+  }
+  const file = /^\/v1\/files\/([a-f0-9]{16})$/.exec(path);
+  if (method === "GET" && file) {
+    const found = services.readAttachment(file[1]);
+    if (!found || call.url.searchParams.get("t") !== found.token) throw new NotFound("没有这个附件");
+    return new Response(found.bytes as BodyInit, {
+      headers: {
+        "content-type": found.type,
+        "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(found.name)}`,
+        ...NO_STORE,
+      },
+    });
   }
   if (method === "POST" && path === "/v1/tell") return tell(call);
   if (method === "GET" && path === "/v1/work") return work(call);
