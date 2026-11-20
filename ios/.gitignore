@@ -1,0 +1,8 @@
+build/
+AutoLoop.xcodeproj/
+AutoLoop/Info.plist
+DerivedData/
+*.xcuserstate
+xcuserdata/
+build-device/
+ShareExtension/Info.plist

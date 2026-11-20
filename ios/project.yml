@@ -1,0 +1,101 @@
+name: AutoLoop
+options:
+  bundleIdPrefix: com.wajipu
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: QNW2755VM5
+packages:
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.0
+targets:
+  AutoLoopShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+      - path: Shared
+    info:
+      path: ShareExtension/Info.plist
+      properties:
+        CFBundleDisplayName: 交给 AutoLoop
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsText: true
+              NSExtensionActivationSupportsWebURLWithMaxCount: 1
+              NSExtensionActivationSupportsImageWithMaxCount: 10
+              NSExtensionActivationSupportsMovieWithMaxCount: 2
+    entitlements:
+      path: ShareExtension/ShareExtension.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop.share
+        TARGETED_DEVICE_FAMILY: "1"
+
+  AutoLoopWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widget
+        excludes:
+          - Info.plist
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: AutoLoop
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop.widget
+        TARGETED_DEVICE_FAMILY: "1"
+
+  AutoLoop:
+    type: application
+    platform: iOS
+    sources:
+      - path: AutoLoop
+      - path: Shared
+    dependencies:
+      - package: MarkdownUI
+      - target: AutoLoopShare
+        embed: true
+      - target: AutoLoopWidget
+        embed: true
+    entitlements:
+      path: AutoLoop/AutoLoop.entitlements
+    info:
+      path: AutoLoop/Info.plist
+      properties:
+        CFBundleDisplayName: AutoLoop
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
+        UILaunchScreen: {}
+        NSCameraUsageDescription: 拍照作为工作项附件
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIUserInterfaceStyle: Automatic
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.wajipu.autoloop
+            CFBundleURLSchemes:
+              - autoloop
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.wajipu.autoloop.create
+            UIApplicationShortcutItemTitle: 新建工作项
+            UIApplicationShortcutItemIconType: UIApplicationShortcutIconTypeCompose
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wajipu.autoloop
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic

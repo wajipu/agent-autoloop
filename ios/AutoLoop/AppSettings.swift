@@ -1,0 +1,142 @@
+import Foundation
+import Security
+import SwiftUI
+
+/// 令牌放钥匙串，owner/repo 放 UserDefaults。首次启动用 KoKLam 的默认值。
+final class AppSettings: ObservableObject {
+    static let shared = AppSettings()
+
+    @Published var token: String {
+        didSet {
+            Keychain.set(token, for: "github.token")
+            SharedConfig.token = token
+        }
+    }
+    @Published var owner: String {
+        didSet {
+            UserDefaults.standard.set(owner, forKey: "github.owner")
+            SharedConfig.owner = owner
+        }
+    }
+    @Published var repo: String {
+        didSet {
+            UserDefaults.standard.set(repo, forKey: "github.repo")
+            SharedConfig.repo = repo
+        }
+    }
+    @Published var defaultCategory: IssueCategory {
+        didSet {
+            UserDefaults.standard.set(defaultCategory.rawValue, forKey: "github.category")
+            NotificationCenter.default.post(name: .issueCategoryChanged, object: nil)
+        }
+    }
+    @Published var appearance: Appearance {
+        didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "app.appearance") }
+    }
+    @Published var hubURL: String {
+        didSet { UserDefaults.standard.set(hubURL, forKey: "hub.url") }
+    }
+    @Published var hubKey: String {
+        didSet { Keychain.set(hubKey, for: "hub.key") }
+    }
+
+    private init() {
+        let defaults = UserDefaults.standard
+        let stored = Keychain.get("github.token") ?? ""
+        let fromEnv = ProcessInfo.processInfo.environment["GITHUB_TOKEN"] ?? ""
+        token = stored.isEmpty ? fromEnv : stored
+        owner = defaults.string(forKey: "github.owner") ?? "koklam-saas"
+        repo = defaults.string(forKey: "github.repo") ?? "koklam-plus"
+        defaultCategory = IssueCategory(rawValue: defaults.string(forKey: "github.category") ?? "Task") ?? .task
+        appearance = Appearance(rawValue: defaults.string(forKey: "app.appearance") ?? "system") ?? .system
+        hubURL = ProcessInfo.processInfo.environment["HUB_URL"]
+            ?? defaults.string(forKey: "hub.url")
+            ?? "http://103.236.88.53:28081"
+        let storedHub = Keychain.get("hub.key") ?? ""
+        let hubFromEnv = ProcessInfo.processInfo.environment["HUB_KEY"] ?? ""
+        hubKey = hubFromEnv.isEmpty ? storedHub : hubFromEnv
+
+        // 启动时用环境变量注入过一次，就存进钥匙串，之后不用再带
+        if stored.isEmpty, !fromEnv.isEmpty { Keychain.set(fromEnv, for: "github.token") }
+        if storedHub.isEmpty, !hubFromEnv.isEmpty { Keychain.set(hubFromEnv, for: "hub.key") }
+
+        // 分享扩展要用同一份配置，写进 App Group
+        SharedConfig.token = token
+        SharedConfig.owner = owner
+        SharedConfig.repo = repo
+    }
+
+    var hubConfigured: Bool { !hubURL.isEmpty && !hubKey.isEmpty }
+
+    /// 规则配置走控制台（跟中台同一台机器的 28090）。
+    var consoleURL: String {
+        if let url = URL(string: hubURL.trimmingCharacters(in: .whitespaces)), let host = url.host {
+            return "\(url.scheme ?? "http")://\(host):28090"
+        }
+        return hubURL
+    }
+
+    var configured: Bool { !token.isEmpty && !owner.isEmpty && !repo.isEmpty }
+
+    /// Issue 在 GitHub 上的网页地址（number 即 identifier）。
+    func issueURL(number: String) -> URL? {
+        guard let n = Int(number) else { return nil }
+        return URL(string: "https://github.com/\(owner)/\(repo)/issues/\(n)")
+    }
+}
+
+extension Notification.Name {
+    static let issueCategoryChanged = Notification.Name("issueCategoryChanged")
+    static let issuesShouldReload = Notification.Name("issuesShouldReload")
+}
+
+enum Appearance: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .system: "跟随系统"
+        case .light: "浅色"
+        case .dark: "深色"
+        }
+    }
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+enum Keychain {
+    private static let service = "com.wajipu.autoloop"
+
+    static func set(_ value: String, for account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        SecItemDelete(query as CFDictionary)
+        guard !value.isEmpty else { return }
+        var add = query
+        add[kSecValueData as String] = Data(value.utf8)
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    static func get(_ account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data
+        else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
