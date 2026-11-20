@@ -263,6 +263,8 @@ enum StatusStyle {
         if gap < 3600 { return "\(Int(gap / 60)) 分钟前" }
         if gap < 86_400 { return "\(Int(gap / 3600)) 小时前" }
         if gap < 7 * 86_400 { return "\(Int(gap / 86_400)) 天前" }
+        // 脏数据护栏：epoch 时代（如 1970）的缺失日期不渲染成「56 年前」。
+        if gap > 20 * 365 * 86_400 { return "—" }
         return relativeFormatter.localizedString(for: date, relativeTo: .now)
     }
 }

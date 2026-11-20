@@ -97,6 +97,8 @@ struct GitHubClient {
 
     private func rawRequest(path: String, method: String, body: [String: Any]?) async throws -> Data {
         let (baseURL, viaHub) = requestBase()
+        // 统一兜底路径分隔符：调用方有的带「/」有的不带，缺了会把主机名拼坏（如 api.github.comrepos）。
+        let path = path.hasPrefix("/") ? path : "/" + path
         guard let url = URL(string: baseURL + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = method
