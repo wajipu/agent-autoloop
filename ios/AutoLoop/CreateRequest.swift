@@ -50,7 +50,7 @@ final class CreateRequest: ObservableObject {
         draft = Draft(title: title, text: text, category: category)
     }
 
-    /// 链接里的大类：英文 bug/task/req/topic/risk 或中文「缺陷/任务/需求/主题/风险」。
+    /// 链接里的大类：英文 bug/task/req 或中文「缺陷/任务/需求」。
     static func category(_ value: String?) -> IssueCategory? {
         guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
         if let match = IssueCategory.allCases.first(where: {

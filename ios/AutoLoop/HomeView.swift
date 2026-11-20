@@ -87,6 +87,7 @@ struct HomeView: View {
                 }
             }
             .onChange(of: deepLink.cardID) { openPendingCard() }
+            .onChange(of: deepLink.runID) { openPendingRun() }
             .confirmationDialog("暂停全部规则？", isPresented: $confirmPauseAll, titleVisibility: .visible) {
                 Button("暂停全部", role: .destructive) {
                     Task { await pauseAllRules() }
@@ -315,6 +316,13 @@ struct HomeView: View {
               let card = state?.cards.first(where: { $0.id == id }) else { return }
         deepLink.cardID = nil
         path.append(card)
+    }
+
+    private func openPendingRun() {
+        guard let id = deepLink.runID,
+              let run = state?.runs.first(where: { $0.id == id }) else { return }
+        deepLink.runID = nil
+        path.append(run)
     }
 
     private func load() async {

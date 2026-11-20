@@ -34,10 +34,17 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: "app.appearance") }
     }
     @Published var hubURL: String {
-        didSet { UserDefaults.standard.set(hubURL, forKey: "hub.url") }
+        didSet {
+            UserDefaults.standard.set(hubURL, forKey: "hub.url")
+            // GitHubClient 在 Shared 目标里拿不到钥匙串，经中台转发需要的地址同步进 App Group。
+            SharedConfig.defaults.set(hubURL, forKey: "hub.url.copy")
+        }
     }
     @Published var hubKey: String {
-        didSet { Keychain.set(hubKey, for: "hub.key") }
+        didSet {
+            Keychain.set(hubKey, for: "hub.key")
+            SharedConfig.defaults.set(hubKey, forKey: "hub.key.copy")
+        }
     }
 
     private init() {
@@ -64,6 +71,9 @@ final class AppSettings: ObservableObject {
         SharedConfig.token = token
         SharedConfig.owner = owner
         SharedConfig.repo = repo
+        // 经中台转发 GitHub 请求也要用到（GitHubClient 在 Shared 目标读不到钥匙串）
+        SharedConfig.defaults.set(hubURL, forKey: "hub.url.copy")
+        SharedConfig.defaults.set(hubKey, forKey: "hub.key.copy")
     }
 
     var hubConfigured: Bool { !hubURL.isEmpty && !hubKey.isEmpty }

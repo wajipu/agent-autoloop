@@ -1,41 +1,185 @@
 import SwiftUI
 
+// MARK: - GitHub 目标解析（轮次 → 仓库 / PR / Issue）
+
+/// 从事件链接解析 GitHub 目标。轮次详情页用它把「github · prs.opened · #2」
+/// 还原成用户认识的东西：哪个仓库的哪个 PR、现在什么状态。
+struct GitHubRef: Equatable {
+    enum Kind {
+        case pull, issue
+    }
+
+    let owner: String
+    let repo: String
+    let kind: Kind
+    let number: Int
+    let url: URL
+
+    var repoFullName: String { "\(owner)/\(repo)" }
+
+    /// 识别 github.com/{owner}/{repo}/pull/{n} 和 /issues/{n}，其余链接返回 nil。
+    static func parse(_ link: String?) -> GitHubRef? {
+        guard let link,
+              let url = URL(string: link),
+              let host = url.host, host.hasSuffix("github.com") else { return nil }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count >= 4 else { return nil }
+        let kind: Kind
+        switch parts[2] {
+        case "pull": kind = .pull
+        case "issues": kind = .issue
+        default: return nil
+        }
+        guard let number = Int(parts[3]) else { return nil }
+        return GitHubRef(owner: parts[0], repo: parts[1], kind: kind, number: number, url: url)
+    }
+}
+
+/// 把内核事件类型翻译成用户语言，不再暴露 prs.opened 这类机器码。
+func humanEventName(source: String, type: String, ref: GitHubRef?) -> String {
+    switch (source, type) {
+    case ("github", "prs.opened"):
+        return ref.map { "\($0.repo) PR #\($0.number) 有更新，自动重审" } ?? "有 PR 更新，自动重审"
+    case ("github", "prs.fixrequested"):
+        return "评审不通过，等修复"
+    case ("github", "issues.opened"):
+        return "有新 Issue，等处理"
+    case ("github", "issues.labeled"):
+        return "有 Issue 被打上交付标记"
+    case ("local", "task.submitted"):
+        return "手动下发的任务"
+    case ("local", "upstream.updated"):
+        return "官方中台有新版本，等拍板"
+    case ("app", _):
+        return "手机上发起了操作"
+    default:
+        return source == "github" ? type : "定时触发"
+    }
+}
+
 // MARK: - 轮次详情
 
+/// 页面结构按用户关心的顺序组织：
+/// 结论 → 这个轮次在处理 GitHub 上哪个东西（实时状态）→ 改了哪些提交 → 经过 → 附注。
+/// 中台内部概念（规则版本、单元领取、事件类型码）一律不出现。
 struct RunDetailView: View {
     let run: HubRun
     @StateObject private var settings = AppSettings.shared
     @State private var steps: [TimelineStep]?
     @State private var web: WebSheet?
     @State private var error: String?
+    @State private var pull: GitHubClient.PullLite?
+    @State private var pullFailed = false
+
+    /// 这一轮处理的 GitHub 目标（从触发事件链接解析，通常只有一个）。
+    private var ref: GitHubRef? {
+        (run.events ?? []).compactMap { GitHubRef.parse($0.link) }.first
+    }
 
     var body: some View {
         List {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Text("#\(run.id)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        StateBadge(state: run.state)
-                        if run.attempts > 0 {
-                            Text("第 \(run.attempts + 1) 次")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
+            headerSection
+            if let ref { githubSection(ref) }
+            changesSection
+            journeySection
+            footerSection
+            if let message = run.error, !message.isEmpty {
+                Section("错误") {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(run.rule)
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $web) { web in
+            SafariSheet(url: web.url)
+        }
+        .task {
+            await load()
+            await loadPull()
+        }
+    }
+
+    // MARK: 头部：结论
+
+    private var headerSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    StateBadge(state: run.state)
+                    if run.attempts > 1 {
+                        Text("重试过 \(run.attempts) 次")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
-                    Text(run.rule)
-                        .font(.title3.weight(.semibold))
-                    let prose = ChangeParser.prose(run.summary)
-                    if !prose.isEmpty {
-                        Text(prose)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    if let created = run.created, let finished = run.finished {
+                        Text("用时 " + duration(from: created, to: finished))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                .padding(.vertical, 4)
+                let prose = ChangeParser.prose(run.summary)
+                if !prose.isEmpty {
+                    Text(prose)
+                        .font(.subheadline)
+                        .textSelection(.enabled)
+                }
             }
+            .padding(.vertical, 4)
+        }
+    }
 
+    // MARK: GitHub 目标 + 实时状态
+
+    private func githubSection(_ ref: GitHubRef) -> some View {
+        Section(ref.kind == .pull ? "Pull Request" : "Issue") {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    web = WebSheet(url: ref.url)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("\(ref.repoFullName) #\(ref.number)")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if ref.kind == .pull {
+                    if let pull {
+                        Text(pull.title)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Label(pull.stateLabel, systemImage: pull.merged ? "arrow.triangle.merge"
+                                : (pull.state == "open" ? "circle" : "xmark.circle"))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(pull.merged ? Color.purple : (pull.state == "open" ? Color.green : Color.red))
+                    } else if pullFailed {
+                        Text("读不到 PR 当前状态")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    // MARK: 改动
+
+    private var changesSection: some View {
+        Group {
             let changes = ChangeParser.parse(run.summary)
             if !changes.isEmpty {
                 Section("改动") {
@@ -71,124 +215,51 @@ struct RunDetailView: View {
                     }
                 }
             }
+        }
+    }
 
-            if let events = run.events, !events.isEmpty {
-                let first = events[0]
-                if let subject = first.subject, !subject.isEmpty {
-                    Section("在处理") {
-                        if isWorkitemSerial(subject) {
-                            NavigationLink {
-                                IssueDetailView(item: Workitem.preview(serialNumber: subject, subject: run.summary ?? ""))
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "target")
-                                    Text(subject).font(.subheadline.weight(.medium))
-                                    Spacer()
-                                    Text("查看工单").font(.caption2).foregroundStyle(.tertiary)
-                                }
-                            }
-                        } else {
-                            Label(subject, systemImage: "target")
-                                .font(.subheadline.weight(.medium))
-                                .textSelection(.enabled)
-                        }
+    // MARK: 经过（人话时间线）
+
+    private var journeySection: some View {
+        Section("经过") {
+            if let steps {
+                if steps.isEmpty {
+                    Text("没有更多记录").foregroundStyle(.secondary)
+                } else {
+                    ForEach(steps) { step in
+                        TimelineRow(step: step)
                     }
                 }
+            } else if let error {
+                Text(error).font(.footnote).foregroundStyle(.orange)
+            } else {
+                HStack { Spacer(); ProgressView(); Spacer() }
             }
+        }
+    }
 
-            Section("属性") {
-                LabeledContent("接单 Agent", value: run.agent ?? "—")
-                if let created = run.created {
-                    LabeledContent("开始", value: StatusStyle.stamp(created))
-                }
-                if let finished = run.finished {
-                    LabeledContent("结束", value: StatusStyle.stamp(finished))
-                    LabeledContent("用时", value: duration(from: run.created, to: finished))
-                }
-            }
+    // MARK: 附注（调试信息降级到底部）
 
-            if let events = run.events, !events.isEmpty {
-                Section("触发事件") {
-                    ForEach(Array(events.enumerated()), id: \.offset) { _, event in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("\(event.source) · \(event.type)")
-                                .font(.subheadline)
-                            if let subject = event.subject, !subject.isEmpty {
-                                Text(subject).font(.caption).foregroundStyle(.secondary)
-                            }
-                            if let summary = event.summary, !summary.isEmpty {
-                                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                            }
-                            if let link = event.link, let url = URL(string: link), url.scheme?.hasPrefix("http") == true {
-                                Button {
-                                    web = WebSheet(url: url)
-                                } label: {
-                                    Label("打开来源", systemImage: "safari").font(.caption)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 2)
+    private var footerSection: some View {
+        Group {
+            if run.agent != nil || run.link != nil || run.session != nil {
+                Section {
+                    if let agent = run.agent {
+                        LabeledContent("Agent", value: agent)
                     }
-                }
-            }
-
-            if let link = run.link, !link.isEmpty {
-                Section("会话") {
-                    if let url = URL(string: link), link.hasPrefix("http") {
+                    if let created = run.created {
+                        LabeledContent("开始", value: StatusStyle.stamp(created))
+                    }
+                    if let link = run.link, !link.isEmpty, link.hasPrefix("http"), let url = URL(string: link) {
                         Button {
                             web = WebSheet(url: url)
                         } label: {
-                            Label("查看这一轮的会话", systemImage: "safari")
-                        }
-                    } else {
-                        Text(link)
-                            .font(.footnote.monospaced())
-                            .textSelection(.enabled)
-                    }
-                    if let session = run.session, !session.isEmpty {
-                        LabeledContent("会话 id") {
-                            Text(session)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                            Label("看这轮的 agent 会话", systemImage: "safari")
                         }
                     }
-                }
-            }
-
-            if let message = run.error, !message.isEmpty {
-                Section("错误") {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                        .textSelection(.enabled)
-                }
-            }
-
-            Section("时间线") {
-                if let steps {
-                    if steps.isEmpty {
-                        Text("没有更多记录").foregroundStyle(.secondary)
-                    } else {
-                        ForEach(steps) { step in
-                            TimelineRow(step: step)
-                        }
-                    }
-                } else if let error {
-                    Text(error).font(.footnote).foregroundStyle(.orange)
-                } else {
-                    HStack { Spacer(); ProgressView(); Spacer() }
                 }
             }
         }
-        .listStyle(.insetGrouped)
-        .navigationTitle("第 \(run.id) 轮")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $web) { web in
-            SafariSheet(url: web.url)
-        }
-        .task { await load() }
     }
 
     private func load() async {
@@ -202,6 +273,17 @@ struct RunDetailView: View {
             steps = Timeline.build(facts: facts, runID: run.id)
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    /// 拉 PR 当前状态（开放/已合并/已关闭），失败就静默降级，不影响页面其他部分。
+    private func loadPull() async {
+        guard settings.configured, let ref, ref.kind == .pull else { return }
+        let github = GitHubClient(owner: settings.owner, repo: settings.repo, token: settings.token)
+        do {
+            pull = try await github.pullInfo(fullRepo: ref.repoFullName, number: ref.number)
+        } catch {
+            pullFailed = true
         }
     }
 
@@ -249,6 +331,9 @@ struct TimelineRow: View {
     }
 }
 
+/// 把中台的 why 流水整理成用户能看懂的「经过」：
+/// 触发（事件翻译成人话）→ 开始处理 → 拍板/重试 → 完成。
+/// 规则版本号、接单程序领取这类内部动作不展示。
 enum Timeline {
     static func build(facts: [[String: Any]], runID: Int) -> [TimelineStep] {
         var out: [TimelineStep] = []
@@ -263,36 +348,22 @@ enum Timeline {
                 out.append(TimelineStep(at: at, text: "开始处理"))
                 last["started"] = "1"
             }
-            if type == "rules", last["rules"] == nil {
-                out.append(TimelineStep(at: at, text: "规则版本 #\(fact["seq"] as? Int ?? 0)"))
-                last["rules"] = "1"
-            }
 
             for change in fact["changes"] as? [[String: Any]] ?? [] {
                 let table = change["table"] as? String ?? ""
                 guard let row = change["row"] as? [String: Any] else { continue }
 
                 if table == "runs", (row["id"] as? Int) == runID {
-                    if let claimed = row["claimed_at"] as? String, last["claimed"] != claimed {
-                        out.append(TimelineStep(at: date(claimed), text: "接单程序领取"))
-                        last["claimed"] = claimed
-                    }
-                    if let finished = row["finished_at"] as? String, last["finished"] != finished {
-                        let summary = row["summary"] as? String ?? ""
-                        let state = row["state"] as? String ?? ""
-                        let tail = summary.isEmpty ? (state == "cancelled" ? "已停止" : "没有填写结论") : summary
-                        out.append(TimelineStep(at: date(finished), text: "结束：\(tail)"))
-                        last["finished"] = finished
-                    }
                     let attempts = String(describing: row["attempts"] ?? 0)
                     if (row["state"] as? String) == "queued", last["attempts"] != nil, last["attempts"] != attempts {
                         let message = row["error"] as? String ?? ""
-                        out.append(TimelineStep(at: at, text: "本次未完成：\(message)"))
+                        out.append(TimelineStep(at: at, text: "有一次没跑成：\(message)"))
                     }
                     if (row["state"] as? String) == "queued" { last["attempts"] = attempts }
-                    if let link = row["link"] as? String, last["link"] != link {
-                        out.append(TimelineStep(at: at, text: "会话：\(link)"))
-                        last["link"] = link
+                    if let finished = row["finished_at"] as? String, last["finished"] != finished {
+                        last["finished"] = finished
+                        // 结论已经在页面顶部展示，时间线只标记完成时间。
+                        out.append(TimelineStep(at: date(finished), text: "完成"))
                     }
                 }
 
@@ -300,16 +371,16 @@ enum Timeline {
                     seenEvents.add(eventID)
                     let source = row["source"] as? String ?? ""
                     let kind = row["type"] as? String ?? ""
-                    let subject = row["subject"] as? String ?? ""
-                    let parts = [source, kind] + (subject.isEmpty ? [] : [subject])
-                    out.append(TimelineStep(at: date(row["received_at"]), text: "触发事件：\(parts.joined(separator: " · "))"))
+                    let link = row["link"] as? String
+                    let ref = GitHubRef.parse(link)
+                    out.append(TimelineStep(at: date(row["received_at"]), text: "触发：\(humanEventName(source: source, type: kind, ref: ref))"))
                 }
 
                 if table == "cards", (row["run_id"] as? Int) == runID || (row["answer_event"] as? Int) != nil {
                     if let decided = row["decided_at"] as? String, last["card-\(row["id"] ?? 0)"] != decided {
                         let title = row["title"] as? String ?? ""
                         let answer = row["answer"] as? String ?? ""
-                        out.append(TimelineStep(at: date(decided), text: "回答「\(title)」：\(answer)"))
+                        out.append(TimelineStep(at: date(decided), text: "你拍板「\(title)」：\(answer)"))
                         last["card-\(row["id"] ?? 0)"] = decided
                     }
                 }
@@ -376,7 +447,7 @@ struct CardDetailView: View {
                     NavigationLink {
                         RunDetailView(run: trace.run)
                     } label: {
-                        Label("查看第 \(trace.run.id) 轮", systemImage: "clock.arrow.circlepath")
+                        Label("查看这一轮的处理过程", systemImage: "clock.arrow.circlepath")
                     }
                 } else if traceLoading {
                     ProgressView("查找来源…")
@@ -420,7 +491,7 @@ struct CardDetailView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("第 \(card.id) 张卡片")
+        .navigationTitle("待拍板")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             defer { traceLoading = false }

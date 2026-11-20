@@ -9,6 +9,20 @@ struct GitHubClient {
 
     private let base = URL(string: "https://api.github.com")!
 
+    /// 是否经中台转发 GitHub 请求。中台是固定 IP 直连（无 DNS 风险），服务器到
+    /// GitHub 也稳定；手机/模拟器直连 api.github.com 在国内网络常被断连。
+    /// 默认开（未写入过设置视为开），只有用户明确关闭或中台没配好时才直连。
+    private func requestBase() -> (url: String, viaHub: Bool) {
+        let viaHub = UserDefaults.standard.object(forKey: "github.via_hub") == nil
+            || UserDefaults.standard.bool(forKey: "github.via_hub")
+        let hubURL = (SharedConfig.defaults.string(forKey: "hub.url.copy") ?? "").trimmingCharacters(in: .whitespaces)
+        let hubKey = SharedConfig.defaults.string(forKey: "hub.key.copy") ?? ""
+        if viaHub, !hubURL.isEmpty, !hubKey.isEmpty {
+            return (hubURL + "/v1/gh", true)
+        }
+        return (base.absoluteString, false)
+    }
+
     enum GitHubError: LocalizedError, Decodable {
         case api(String)
         case notFound
@@ -47,16 +61,59 @@ struct GitHubClient {
         let name: String
     }
 
+    /// PR 概要（轮次详情用）：轮次可能来自任意仓库，所以按完整仓库全名查，不走 init 里的 owner/repo。
+    struct PullLite: Decodable {
+        let title: String
+        let state: String
+        let merged: Bool
+
+        var stateLabel: String {
+            merged ? "已合并" : (state == "open" ? "开放中" : "已关闭")
+        }
+    }
+
+    func pullInfo(fullRepo: String, number: Int) async throws -> PullLite {
+        let data = try await request(path: "/repos/\(fullRepo)/pulls/\(number)")
+        return try Self.decode(PullLite.self, from: data)
+    }
+
 
     private func request(path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> Data {
-        guard let url = URL(string: base.absoluteString + path) else { throw URLError(.badURL) }
+        // 直连 api.github.com 在国内网络常见 DNS 污染/TLS 断连（时好时坏），
+        // 失败自动重试两次把抖动吸收掉；404 是确定性结果，不重试。
+        var lastError: Error = URLError(.badURL)
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .milliseconds(attempt == 1 ? 400 : 1000))
+            }
+            do {
+                return try await rawRequest(path: path, method: method, body: body)
+            } catch let e as GitHubError {
+                throw e
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    private func rawRequest(path: String, method: String, body: [String: Any]?) async throws -> Data {
+        let (baseURL, viaHub) = requestBase()
+        guard let url = URL(string: baseURL + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if viaHub {
+            // 经中台时 Authorization 承载中台本人密钥，GitHub 令牌换独立头转发。
+            let hubKey = SharedConfig.defaults.string(forKey: "hub.key.copy") ?? ""
+            req.setValue("Bearer \(hubKey)", forHTTPHeaderField: "Authorization")
+            req.setValue(token, forHTTPHeaderField: "X-GitHub-Token")
+        } else {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         if let body { req.httpBody = try JSONSerialization.data(withJSONObject: body) }
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await URLSession.app.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 404 { throw GitHubError.notFound }

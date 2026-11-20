@@ -96,6 +96,32 @@ function ownerAct(call: Call, type: string, ...args: any[]) {
   return json({ ok: true });
 }
 
+/** 手机 App 所在网络到 api.github.com 常被 DNS 污染/TLS 断连，App 会把 GitHub 请求
+ * 改道到中台：/v1/gh/<原路径>?<原查询>。中台用本人密钥鉴权，GitHub 令牌走独立头，
+ * 转发后原样返回状态码和响应体。只开放 GET。 */
+async function ghProxy(call: Call) {
+  requireKey(call, "owner");
+  const githubToken = call.request.headers.get("x-github-token") ?? "";
+  if (!githubToken) throw new InputError("缺 X-GitHub-Token 头");
+  const target =
+    "https://api.github.com" +
+    call.url.pathname.slice("/v1/gh".length) +
+    (call.url.search || "");
+  const upstream = await fetch(target, {
+    headers: {
+      authorization: `Bearer ${githubToken}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "agent-autoloop-hub",
+      "x-github-api-version": "2022-11-28",
+    },
+  });
+  const body = await upstream.text();
+  return new Response(body, {
+    status: upstream.status,
+    headers: { ...NO_STORE, "content-type": upstream.headers.get("content-type") ?? "application/json" },
+  });
+}
+
 /** When a long poll gives up: as long as it asked to wait, up to the most anyone gets. */
 function waitUntil(call: Call) {
   const seconds = Number(call.url.searchParams.get("wait") ?? MAX_WAIT_SECONDS) || 0;
@@ -323,6 +349,7 @@ async function route(call: Call): Promise<Response> {
   }
   if (method === "POST" && action === "result") return json(act(call, "finish", runId, token, await readJson(request)));
   if (method === "GET" && path === "/v1/cards/next") return nextCard(call);
+  if (method === "GET" && path.startsWith("/v1/gh/")) return ghProxy(call);
   const card = /^\/v1\/cards\/([1-9][0-9]*)\/(delivered|failed|answer|resolve)$/.exec(path);
   if (method === "POST" && card) return cardAction(call, Number(card[1]), card[2]);
   const ruleControl = /^\/v1\/rules\/([^/]+)\/(pause|resume|run|replay)$/.exec(path);

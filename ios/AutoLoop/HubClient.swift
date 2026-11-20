@@ -180,7 +180,7 @@ struct HubClient {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.app.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -198,7 +198,7 @@ struct HubClient {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
         request.timeoutInterval = 20
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.app.data(for: request)
         guard let http = response as? HTTPURLResponse else { return try decode(data) }
         guard http.statusCode == 200 else {
             let body = String(data: data.prefix(200), encoding: .utf8) ?? ""
@@ -215,7 +215,7 @@ struct HubClient {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "authorization")
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.app.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw HubError.http(code, String(data: data.prefix(200), encoding: .utf8) ?? "")
@@ -237,7 +237,7 @@ struct HubClient {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["choice": choice])
         request.timeoutInterval = 20
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.app.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw HubError.http(code, String(data: data.prefix(200), encoding: .utf8) ?? "")

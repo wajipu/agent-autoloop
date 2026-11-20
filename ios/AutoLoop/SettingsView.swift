@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SettingsView: View {
+    /// 代理设置与 URLSession.app 共用这个键；直接存 standard defaults，改动立即生效。
+    @AppStorage("network.proxy") private var proxySetting = ""
     @StateObject private var settings = AppSettings.shared
     @State private var path = NavigationPath()
 
@@ -36,6 +38,17 @@ struct SettingsView: View {
                         ForEach(Appearance.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                }
+
+                Section {
+                    TextField("例：127.0.0.1:7897", text: $proxySetting)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                } header: {
+                    Text("网络代理（可选）")
+                } footer: {
+                    Text("GitHub 连不上时填代理地址；留空跟随系统。改完立即生效。")
                 }
 
                 Section {
@@ -173,6 +186,8 @@ struct HubSettingsView: View {
 
 struct GitHubSettingsView: View {
     @StateObject private var settings = AppSettings.shared
+    /// 与 GitHubClient.requestBase() 共用此键；未写入过视为开（默认经中台转发）。
+    @AppStorage("github.via_hub") private var viaHub = true
 
     var body: some View {
         Form {
@@ -213,6 +228,12 @@ struct GitHubSettingsView: View {
                 Text("令牌")
             } footer: {
                 Text("GitHub 个人访问令牌（需要 repo 权限），存在本机钥匙串里。")
+            }
+
+            Section {
+                Toggle("经中台转发", isOn: $viaHub)
+            } footer: {
+                Text("打开后 GitHub 请求由中台服务器转发，适合直连不稳定的网络；令牌仍然只存在本机。关掉则直连 api.github.com。")
             }
         }
         .navigationTitle("GitHub")

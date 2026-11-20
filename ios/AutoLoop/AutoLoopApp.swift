@@ -5,6 +5,7 @@ import ObjectiveC
 final class DeepLink: ObservableObject {
     static let shared = DeepLink()
     @Published var cardID: Int?
+    @Published var runID: Int?
 }
 
 /// 长按 App 图标选「新建工作项」时接住这个动作。
@@ -160,6 +161,9 @@ struct RootView: View {
             }
             if url.host == "card", let id = Int(url.lastPathComponent) {
                 DeepLink.shared.cardID = id
+            }
+            if url.host == "run", let id = Int(url.lastPathComponent) {
+                DeepLink.shared.runID = id
             }
             tab = url.host == "issues" ? "issues" : "home"
         }

@@ -10,8 +10,6 @@ enum IssueCategory: String, CaseIterable, Identifiable {
     case bug = "Bug"
     case task = "Task"
     case req = "Req"
-    case topic = "Topic"
-    case risk = "Risk"
 
     var id: String { rawValue }
     var label: String {
@@ -19,8 +17,6 @@ enum IssueCategory: String, CaseIterable, Identifiable {
         case .bug: "缺陷"
         case .task: "任务"
         case .req: "需求"
-        case .topic: "主题"
-        case .risk: "风险"
         }
     }
     /// GitHub 仓库里用的标签名（不存在会在建单时自动创建）。
