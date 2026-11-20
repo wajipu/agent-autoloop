@@ -9,7 +9,7 @@ extension URLSession {
     private static var cachedProxySession: (key: String, session: URLSession)?
 
     static var app: URLSession {
-        let key = UserDefaults.standard.string(forKey: "network.proxy") ?? ""
+        let key = (UserDefaults.standard.string(forKey: "network.proxy") ?? "")
             .trimmingCharacters(in: .whitespaces)
         if let cached = cachedProxySession, cached.key == key {
             return cached.session
