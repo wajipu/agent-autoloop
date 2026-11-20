@@ -186,7 +186,7 @@ struct HubSettingsView: View {
 
 struct GitHubSettingsView: View {
     @StateObject private var settings = AppSettings.shared
-    /// 与 GitHubClient.requestBase() 共用此键；未写入过视为开（默认经中台转发）。
+    /// 与 GitHubClient.requestBase() 共用此键；默认关（直连 GitHub）。
     @AppStorage("github.via_hub") private var viaHub = true
 
     var body: some View {
@@ -233,7 +233,7 @@ struct GitHubSettingsView: View {
             Section {
                 Toggle("经中台转发", isOn: $viaHub)
             } footer: {
-                Text("打开后 GitHub 请求由中台服务器转发，适合直连不稳定的网络；令牌仍然只存在本机。关掉则直连 api.github.com。")
+                Text("GitHub 直连不稳定时可打开：请求改道中台服务器转发，令牌仍然只存在本机。默认直连。")
             }
         }
         .navigationTitle("GitHub")

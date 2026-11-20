@@ -97,8 +97,27 @@ function ownerAct(call: Call, type: string, ...args: any[]) {
 }
 
 /** 手机 App 所在网络到 api.github.com 常被 DNS 污染/TLS 断连，App 会把 GitHub 请求
- * 改道到中台：/v1/gh/<原路径>?<原查询>。中台用本人密钥鉴权，GitHub 令牌走独立头，
- * 转发后原样返回状态码和响应体。只开放 GET。 */
+ * 改道到中台：/v1/gh/<原路径>?<原查询>。中台用本人密钥鉴权，GitHub 令牌走独立头。
+ * 中台机房到 GitHub 也被 TCP 阻断，所以真正的出口是家里那台 Mac（有代理）——它
+ * 用接单程序密钥通过 /v1/gh-relay/* 领请求、带结果回来，这里只做排队和等待。 */
+type GhJob = {
+  id: string;
+  target: string;
+  headers: Record<string, string>;
+  resolve: (response: Response) => void;
+  deadline: ReturnType<typeof setTimeout>;
+};
+const GH_JOB_LIFETIME = 15_000;
+const ghQueue: GhJob[] = [];
+const ghPending = new Map<string, GhJob>();
+
+function ghDrop(job: GhJob) {
+  clearTimeout(job.deadline);
+  ghPending.delete(job.id);
+  const index = ghQueue.indexOf(job);
+  if (index >= 0) ghQueue.splice(index, 1);
+}
+
 async function ghProxy(call: Call) {
   requireKey(call, "owner");
   const githubToken = call.request.headers.get("x-github-token") ?? "";
@@ -107,18 +126,57 @@ async function ghProxy(call: Call) {
     "https://api.github.com" +
     call.url.pathname.slice("/v1/gh".length) +
     (call.url.search || "");
-  const upstream = await fetch(target, {
-    headers: {
-      authorization: `Bearer ${githubToken}`,
-      accept: "application/vnd.github+json",
-      "user-agent": "agent-autoloop-hub",
-      "x-github-api-version": "2022-11-28",
-    },
+  if (ghQueue.length >= 20) ghDrop(ghQueue[0]);
+  return await new Promise<Response>((resolve) => {
+    const job: GhJob = {
+      id: crypto.randomUUID(),
+      target,
+      headers: {
+        authorization: `Bearer ${githubToken}`,
+        accept: call.request.headers.get("accept") ?? "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "user-agent": "agent-autoloop-relay",
+      },
+      resolve,
+      deadline: setTimeout(() => {
+        ghDrop(job);
+        resolve(json({ error: "出口机没有来领这个请求，转发超时" }, 504));
+      }, GH_JOB_LIFETIME),
+    };
+    ghQueue.push(job);
+    console.log(`[gh] 排队 ${job.id.slice(0, 8)} ${target}`);
   });
-  const body = await upstream.text();
+}
+
+/** 出口机领取一个待转发请求；没有就返回空对象，让它隔一两秒再来。 */
+function ghRelayNext(call: Call) {
+  requireKey(call, "worker");
+  const job = ghQueue.shift();
+  if (!job) return json({});
+  ghPending.set(job.id, job);
+  return json({ id: job.id, target: job.target, headers: job.headers });
+}
+
+/** 出口机带回结果：status + base64 body，原样转给等着的 App 请求。 */
+async function ghRelayResult(call: Call) {
+  requireKey(call, "worker");
+  const input = (await readJson(call.request)) as {
+    id?: string;
+    status?: number;
+    contentType?: string;
+    body?: string;
+  };
+  const job = input.id ? ghPending.get(input.id) : undefined;
+  if (!job) {
+    console.log(`[gh] 回结果找不到 ${input.id}（待领 ${ghQueue.length}，在途 ${ghPending.size}）`);
+    throw new NotFound("没有这个转发请求（可能已超时）");
+  }
+  ghDrop(job);
+  const status = Number(input.status) >= 100 && Number(input.status) < 600 ? Number(input.status) : 502;
+  const body = Buffer.from(input.body ?? "", "base64");
   return new Response(body, {
-    status: upstream.status,
-    headers: { ...NO_STORE, "content-type": upstream.headers.get("content-type") ?? "application/json" },
+    status,
+    headers: { ...NO_STORE, "content-type": input.contentType || "application/json" },
   });
 }
 
@@ -349,6 +407,8 @@ async function route(call: Call): Promise<Response> {
   }
   if (method === "POST" && action === "result") return json(act(call, "finish", runId, token, await readJson(request)));
   if (method === "GET" && path === "/v1/cards/next") return nextCard(call);
+  if (method === "GET" && path === "/v1/gh-relay/next") return ghRelayNext(call);
+  if (method === "POST" && path === "/v1/gh-relay/result") return ghRelayResult(call);
   if (method === "GET" && path.startsWith("/v1/gh/")) return ghProxy(call);
   const card = /^\/v1\/cards\/([1-9][0-9]*)\/(delivered|failed|answer|resolve)$/.exec(path);
   if (method === "POST" && card) return cardAction(call, Number(card[1]), card[2]);

@@ -9,12 +9,10 @@ struct GitHubClient {
 
     private let base = URL(string: "https://api.github.com")!
 
-    /// 是否经中台转发 GitHub 请求。中台是固定 IP 直连（无 DNS 风险），服务器到
-    /// GitHub 也稳定；手机/模拟器直连 api.github.com 在国内网络常被断连。
-    /// 默认开（未写入过设置视为开），只有用户明确关闭或中台没配好时才直连。
+    /// 直连 api.github.com（国内网络时好时坏，靠重试吸收）。设置里有「经中台转发」
+    /// 开关，想走中台时手动打开。
     private func requestBase() -> (url: String, viaHub: Bool) {
-        let viaHub = UserDefaults.standard.object(forKey: "github.via_hub") == nil
-            || UserDefaults.standard.bool(forKey: "github.via_hub")
+        let viaHub = UserDefaults.standard.bool(forKey: "github.via_hub")
         let hubURL = (SharedConfig.defaults.string(forKey: "hub.url.copy") ?? "").trimmingCharacters(in: .whitespaces)
         let hubKey = SharedConfig.defaults.string(forKey: "hub.key.copy") ?? ""
         if viaHub, !hubURL.isEmpty, !hubKey.isEmpty {
